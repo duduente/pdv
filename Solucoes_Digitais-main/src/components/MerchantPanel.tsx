@@ -1,0 +1,556 @@
+import { useEffect, useRef, useState } from 'react';
+import {
+  CalendarClock, UtensilsCrossed, Calculator, Package,
+  Settings, Home, ExternalLink, Copy, Check,
+  Scissors, Boxes, Receipt, Upload, ClipboardList, Bike,
+} from 'lucide-react';
+import { useApp } from '@/store';
+import { useAuth } from '@/auth/AuthContext';
+import { UserMenu } from '@/components/UserMenu';
+import { supabase } from '@/lib/supabase';
+import { appointments as initialAppointments, MODULE_LABELS, formatCurrency, products as initialProducts } from '@/mockData';
+import { usePersistentState } from '@/hooks/usePersistentState';
+import type { Appointment, CashRegisterData, ModuleKey, Product } from '@/types';
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { cn } from '@/lib/utils';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { toast } from 'sonner';
+import { AppointmentModule } from './modules/AppointmentModule';
+import { MenuModule } from './modules/MenuModule';
+import { CashRegisterModule } from './modules/CashRegisterModule';
+import { InventoryModule } from './modules/InventoryModule';
+import { CommandsModule } from './modules/CommandsModule';
+import { DeliveryModule, DeliveryStoreSettings } from './modules/DeliveryModule';
+import { StoreUserManagement } from './StoreUserManagement';
+import { hasStorePermission } from '@/auth/permissions';
+import type { AppPermission } from '@/types';
+
+const MODULE_ICONS: Record<ModuleKey, typeof CalendarClock> = {
+  agendamento: CalendarClock,
+  cardapio: UtensilsCrossed,
+  pdv: Calculator,
+  estoque: Package,
+  comandas: ClipboardList,
+  delivery: Bike,
+};
+
+const EMPTY_CASH_REGISTER: CashRegisterData = {
+  activeSessionId: null,
+  sessions: [],
+  sales: [],
+  movements: [],
+};
+
+type MerchantView = 'dashboard' | 'settings' | ModuleKey;
+
+export function MerchantPanel() {
+  const { selectedEstablishment, viewPublicPage, updateEstablishment } = useApp();
+  const { user } = useAuth();
+  const establishmentId = selectedEstablishment?.id ?? 'default';
+  const [cashRegister] = usePersistentState<CashRegisterData>(
+    `cash-register:${establishmentId}`,
+    EMPTY_CASH_REGISTER,
+  );
+    const isBarbershop = selectedEstablishment?.slug === 'barbearia-estilo';
+    const isGrocery = selectedEstablishment?.slug === 'mercadinho-central';
+    const [appointments] = usePersistentState<Appointment[]>(
+      `appointments:${establishmentId}`,
+      isBarbershop ? initialAppointments : [],
+    );
+    const [products] = usePersistentState<Product[]>(
+      `inventory:${establishmentId}`,
+      isGrocery ? initialProducts : [],
+    );
+  const [view, setView] = useState<MerchantView>('dashboard');
+  const [copiedLink, setCopiedLink] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedEstablishment) return;
+    const establishment = selectedEstablishment;
+    const canAccessModule = (module: ModuleKey) => module === 'pdv'
+      ? (['pdv-sales', 'pdv-movements', 'pdv-reports', 'pdv-sessions'] as AppPermission[])
+        .some((permission) => hasStorePermission(user, establishment.id, permission))
+      : hasStorePermission(user, establishment.id, module);
+    const modules = (Object.keys(establishment.modules) as ModuleKey[])
+      .filter((module) => establishment.modules[module] && canAccessModule(module));
+    const settingsAllowed = hasStorePermission(user, establishment.id, 'store-settings')
+      || hasStorePermission(user, establishment.id, 'manage-users')
+      || (establishment.modules.delivery && hasStorePermission(user, establishment.id, 'delivery'));
+    const allowedViews: MerchantView[] = [
+      ...(hasStorePermission(user, establishment.id, 'dashboard') ? ['dashboard' as const] : []),
+      ...(settingsAllowed ? ['settings' as const] : []),
+      ...modules,
+    ];
+    setView((current) => allowedViews.includes(current) ? current : allowedViews[0] ?? 'dashboard');
+  }, [selectedEstablishment, user]);
+
+  if (!selectedEstablishment) return null;
+  const est = selectedEstablishment;
+  const canAccessModule = (module: ModuleKey) => module === 'pdv'
+    ? (['pdv-sales', 'pdv-movements', 'pdv-reports', 'pdv-sessions'] as AppPermission[])
+      .some((permission) => hasStorePermission(user, est.id, permission))
+    : hasStorePermission(user, est.id, module);
+  const activeModules = (Object.keys(est.modules) as ModuleKey[]).filter((module) => est.modules[module] && canAccessModule(module));
+  const canViewDashboard = hasStorePermission(user, est.id, 'dashboard');
+  const canViewSettings = hasStorePermission(user, est.id, 'store-settings')
+    || hasStorePermission(user, est.id, 'manage-users')
+    || (est.modules.delivery && hasStorePermission(user, est.id, 'delivery'));
+  const canViewCashReports = hasStorePermission(user, est.id, 'pdv-reports');
+  const canViewCash = canAccessModule('pdv');
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const todayKey = dateKey(todayStart);
+  const todaySales = cashRegister.sales
+    .filter((sale) => sale.status !== 'cancelled' && dateKey(new Date(sale.createdAt)) === todayKey)
+    .reduce((total, sale) => total + sale.total, 0);
+  const todayAppointments = appointments.filter((appointment) => appointment.date === todayKey && appointment.status !== 'cancelled').length;
+  const stockCount = products.reduce((total, product) => total + product.stock, 0);
+  const weekStart = new Date(todayStart);
+  weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+  const weeklyChartData = Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(weekStart);
+    day.setDate(weekStart.getDate() + index);
+    const key = dateKey(day);
+    const sales = cashRegister.sales
+      .filter((sale) => sale.status !== 'cancelled' && dateKey(new Date(sale.createdAt)) === key)
+      .reduce((total, sale) => total + sale.total, 0);
+    const movements = cashRegister.movements.filter((movement) => dateKey(new Date(movement.createdAt)) === key);
+    return {
+      day: day.toLocaleDateString('pt-BR', { weekday: 'short' }),
+      vendas: sales,
+      sangrias: movements.filter((movement) => movement.type === 'withdrawal').reduce((total, movement) => total + movement.amount, 0),
+      suprimentos: movements.filter((movement) => movement.type === 'supply').reduce((total, movement) => total + movement.amount, 0),
+    };
+  });
+  const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
+  const appointmentsById = new Map(appointments.map((appointment) => [appointment.id, appointment]));
+  const professionalSales = new Map<string, { appointments: number; revenue: number }>();
+  for (const sale of cashRegister.sales) {
+    if (sale.origin !== 'agendamento' || sale.status === 'cancelled' || new Date(sale.createdAt) < monthStart) continue;
+    for (const item of sale.items) {
+      const appointment = item.sourceRecordId ? appointmentsById.get(item.sourceRecordId) : undefined;
+      const professional = item.professional || appointment?.professional;
+      if (!professional) continue;
+      const summary = professionalSales.get(professional) ?? { appointments: 0, revenue: 0 };
+      summary.appointments += item.quantity;
+      summary.revenue += item.price * item.quantity;
+      professionalSales.set(professional, summary);
+    }
+  }
+  const professionalChartData = [...professionalSales.entries()]
+    .map(([name, summary]) => ({ professional: name, ...summary }))
+    .sort((first, second) => second.revenue - first.revenue);
+
+  const copyPublicLink = (type: 'agendar' | 'cardapio') => {
+    const link = `${type}/${est.slug}`;
+    navigator.clipboard?.writeText(link);
+    setCopiedLink(link);
+    setTimeout(() => setCopiedLink(null), 2000);
+    toast.success('Link copiado!');
+  };
+
+  return (
+    <div className="flex h-[calc(100vh-3.5rem)] min-h-0 overflow-hidden">
+      {/* Sidebar */}
+      <aside className="flex h-full min-h-0 w-16 shrink-0 flex-col border-r border-slate-200/80 bg-white dark:border-slate-800 dark:bg-slate-900 md:w-64">
+        <div className="border-b border-border/70 p-3 md:p-5">
+          <div className="flex items-center gap-3">
+            <div
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary font-semibold text-primary-foreground"
+            >
+              {est.theme.logo ? <img src={est.theme.logo} alt={`Logo de ${est.name}`} className="h-full w-full rounded-lg object-cover" /> : est.name.charAt(0)}
+            </div>
+            <div className="hidden min-w-0 md:block">
+              <p className="font-semibold text-sm truncate">{est.name}</p>
+              <p className="text-xs text-muted-foreground truncate">{est.plan}</p>
+            </div>
+          </div>
+        </div>
+
+        <nav className="scrollbar-thin min-h-0 flex-1 space-y-1 overflow-y-auto p-2 md:p-3">
+          {canViewDashboard && <SidebarItem
+            icon={Home}
+            label="Dashboard"
+            active={view === 'dashboard'}
+            onClick={() => setView('dashboard')}
+          />}
+          {canViewSettings && <SidebarItem
+            icon={Settings}
+            label="Configurações da loja"
+            active={view === 'settings'}
+            onClick={() => setView('settings')}
+          />}
+          <div className="my-2 h-px bg-border" />
+          <p className="mb-1 hidden px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground md:block">
+            Módulos Ativos
+          </p>
+          {activeModules.length === 0 && (
+            <p className="px-3 py-2 text-xs text-muted-foreground">
+              Nenhum módulo ativo ou permitido para este usuário.
+            </p>
+          )}
+          {activeModules.map((mod) => (
+            <SidebarItem
+              key={mod}
+              icon={MODULE_ICONS[mod]}
+              label={MODULE_LABELS[mod]}
+              active={view === mod}
+              onClick={() => setView(mod)}
+            />
+          ))}
+        </nav>
+
+        <div className="hidden space-y-1 border-t border-border/70 p-3 md:block">
+          {est.modules.agendamento && canAccessModule('agendamento') && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start gap-2 text-xs"
+              onClick={() => viewPublicPage(est.slug, 'booking')}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Ver página de agendamento
+            </Button>
+          )}
+          {est.modules.cardapio && canAccessModule('cardapio') && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start gap-2 text-xs"
+              onClick={() => viewPublicPage(est.slug, 'menu')}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Ver cardápio digital
+            </Button>
+          )}
+        </div>
+        <div className="shrink-0 border-t border-border/70 p-1.5 md:p-3"><UserMenu /></div>
+      </aside>
+
+      {/* Main content */}
+      <main className="scrollbar-thin min-w-0 flex-1 overflow-y-auto bg-background">
+        <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8 animate-fade-in">
+          {view === 'dashboard' && canViewDashboard && <DashboardView />}
+          {view === 'settings' && canViewSettings && <SettingsView />}
+          {view === 'agendamento' && canAccessModule('agendamento') && <AppointmentModule key={est.id} />}
+          {view === 'cardapio' && canAccessModule('cardapio') && <MenuModule key={est.id} />}
+          {view === 'pdv' && canViewCash && <CashRegisterModule key={est.id} />}
+          {view === 'estoque' && canAccessModule('estoque') && <InventoryModule key={est.id} />}
+          {view === 'comandas' && canAccessModule('comandas') && <CommandsModule key={est.id} />}
+          {view === 'delivery' && canAccessModule('delivery') && <DeliveryModule key={est.id} />}
+          {!canViewDashboard && !canViewSettings && activeModules.length === 0 && (
+            <Card className="p-6 text-sm text-muted-foreground">Esta conta não tem permissões ativas nesta loja. Solicite acesso ao responsável.</Card>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+
+  function DashboardView() {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Bem-vindo, {est.owner}!</h1>
+          <p className="text-muted-foreground">Visão geral do seu estabelecimento</p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+          <MiniStat icon={Scissors} label="Módulos ativos" value={activeModules.length.toString()} color="text-sky-700 bg-sky-50 dark:bg-sky-950/50 dark:text-sky-300" />
+          <MiniStat icon={CalendarClock} label="Agendamentos hoje" value={est.modules.agendamento && canAccessModule('agendamento') ? String(todayAppointments) : '—'} color="text-violet-700 bg-violet-50 dark:bg-violet-950/50 dark:text-violet-300" />
+          <MiniStat icon={Receipt} label="Vendas hoje" value={est.modules.pdv && canViewCashReports ? formatCurrency(todaySales) : '—'} color="text-emerald-700 bg-emerald-50 dark:bg-emerald-950/50 dark:text-emerald-300" />
+          <MiniStat icon={Boxes} label="Produtos em estoque" value={est.modules.estoque && canAccessModule('estoque') ? String(stockCount) : '—'} color="text-amber-700 bg-amber-50 dark:bg-amber-950/50 dark:text-amber-300" />
+        </div>
+
+        {est.modules.pdv && canViewCashReports && (
+          <Card className="p-6">
+            <div className="mb-4"><h2 className="font-semibold">Atividade do caixa</h2><p className="text-sm text-muted-foreground">Vendas, sangrias e suprimentos nesta semana</p></div>
+            <div className="h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={weeklyChartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="day" tickLine={false} axisLine={false} />
+                  <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                  <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+                  <Legend />
+                  <Bar dataKey="vendas" name="Vendas" fill="#3f7c78" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="sangrias" name="Sangrias" fill="#bc7a69" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="suprimentos" name="Suprimentos" fill="#86a58d" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+        )}
+
+        {est.modules.agendamento && canViewCashReports && canAccessModule('agendamento') && (
+          <Card className="p-6">
+            <div className="mb-4"><h2 className="font-semibold">Faturamento por profissional</h2><p className="text-sm text-muted-foreground">Serviços registrados no caixa neste mês</p></div>
+            {professionalChartData.length ? (
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={professionalChartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="professional" tickLine={false} axisLine={false} />
+                    <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                    <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+                    <Bar dataKey="revenue" name="Faturamento" fill="#3f7c78" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : <p className="py-8 text-center text-sm text-muted-foreground">Ainda não há serviços registrados por profissional neste mês.</p>}
+          </Card>
+        )}
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {activeModules.map((mod) => {
+            const Icon = MODULE_ICONS[mod];
+            return (
+            <Card key={mod} className="p-6 hover:shadow-md transition-shadow cursor-pointer" onClick={() => setView(mod)}>
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <Icon className="h-6 w-6" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-semibold">{MODULE_LABELS[mod]}</h3>
+                  <p className="text-sm text-muted-foreground mt-0.5">
+                    {mod === 'agendamento' && 'Gerencie serviços, profissionais e agendamentos'}
+                    {mod === 'cardapio' && 'Cadastre produtos e receba pedidos via WhatsApp'}
+                    {mod === 'pdv' && 'Frente de caixa com cálculo de troco e fechamento'}
+                    {mod === 'estoque' && 'Controle de produtos e estoque'}
+                    {mod === 'comandas' && 'Abra comandas e registre o consumo dos clientes'}
+                    {mod === 'delivery' && 'Gerencie pedidos, entregadores e pagamentos de delivery'}
+                  </p>
+                </div>
+                <ExternalLink className="h-4 w-4 text-muted-foreground" />
+              </div>
+            </Card>
+            );
+          })}
+        </div>
+
+        {((est.modules.agendamento && canAccessModule('agendamento')) || (est.modules.cardapio && canAccessModule('cardapio'))) && (
+          <Card className="p-6">
+            <h3 className="font-semibold mb-3">Links Públicos</h3>
+            <div className="space-y-2">
+              {est.modules.agendamento && canAccessModule('agendamento') && (
+                <div className="flex items-center gap-2 rounded-lg border p-3">
+                  <CalendarClock className="h-4 w-4 text-muted-foreground" />
+                  <code className="text-sm flex-1">agendar/{est.slug}</code>
+                  <Button variant="ghost" size="sm" onClick={() => copyPublicLink('agendar')}>
+                    {copiedLink === `agendar/${est.slug}` ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => viewPublicPage(est.slug, 'booking')}>
+                    <ExternalLink className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
+              {est.modules.cardapio && canAccessModule('cardapio') && (
+                <div className="flex items-center gap-2 rounded-lg border p-3">
+                  <UtensilsCrossed className="h-4 w-4 text-muted-foreground" />
+                  <code className="text-sm flex-1">cardapio/{est.slug}</code>
+                  <Button variant="ghost" size="sm" onClick={() => copyPublicLink('cardapio')}>
+                    {copiedLink === `cardapio/${est.slug}` ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => viewPublicPage(est.slug, 'menu')}>
+                    <ExternalLink className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
+            </div>
+          </Card>
+        )}
+      </div>
+    );
+  }
+
+  function SettingsView() {
+    const [name, setName] = useState(est.theme.name);
+    const [accent, setAccent] = useState(est.theme.accentColor);
+    const [logo, setLogo] = useState(est.theme.logo);
+    const [whatsapp, setWhatsapp] = useState(est.whatsapp);
+    const [uploadingLogo, setUploadingLogo] = useState(false);
+    const logoInputRef = useRef<HTMLInputElement>(null);
+
+    const colorOptions = ['#1e3a5f', '#d97706', '#059669', '#4f46e5', '#dc2626', '#7c3aed', '#0891b2', '#be185d'];
+
+    const saveIdentity = async () => {
+      const normalizedName = name.trim();
+      if (!normalizedName) {
+        toast.error('Informe o nome do estabelecimento');
+        return;
+      }
+
+      try {
+        await updateEstablishment(est.id, {
+          name: normalizedName,
+          whatsapp: whatsapp.replace(/\D/g, ''),
+          theme: { ...est.theme, name: normalizedName, accentColor: accent, logo },
+        });
+        toast.success('Identidade visual salva!');
+      } catch (reason) {
+        toast.error(reason instanceof Error ? reason.message : 'Não foi possível salvar a identidade visual.');
+      }
+    };
+
+    const chooseLogo = async (file?: File) => {
+      if (!file) return;
+      if (!file.type.startsWith('image/')) { toast.error('Selecione um arquivo de imagem.'); return; }
+      if (file.size > 8 * 1024 * 1024) { toast.error('A imagem deve ter até 8 MB.'); return; }
+      setUploadingLogo(true);
+      try {
+        const imageBlob = await resizeLogo(file);
+        if (supabase && user && !user.isDemo) {
+          const path = `${est.id}/${crypto.randomUUID()}.jpg`;
+          const { error } = await supabase.storage.from('establishment-logos').upload(path, imageBlob, {
+            contentType: 'image/jpeg',
+            upsert: true,
+          });
+          if (error) throw error;
+          setLogo(supabase.storage.from('establishment-logos').getPublicUrl(path).data.publicUrl);
+        } else {
+          setLogo(await blobToDataUrl(imageBlob));
+        }
+        toast.success('Foto carregada. Salve as alterações para aplicar à loja.');
+      } catch (reason) {
+        toast.error(reason instanceof Error ? reason.message : 'Não foi possível carregar a foto.');
+      } finally {
+        setUploadingLogo(false);
+        if (logoInputRef.current) logoInputRef.current.value = '';
+      }
+    };
+
+    return (
+      <div className="space-y-6 max-w-2xl">
+        <div>
+          <h1 className="text-2xl font-bold">Configurações da loja</h1>
+          <p className="text-muted-foreground">Identidade, delivery e acessos da equipe.</p>
+        </div>
+
+        {hasStorePermission(user, est.id, 'store-settings') && <Card className="p-6 space-y-5">
+          <div className="space-y-1.5">
+            <Label htmlFor="est-name">Nome do Estabelecimento</Label>
+            <Input id="est-name" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Logo / Avatar</Label>
+            <div className="flex items-center gap-4">
+              <div
+                className="flex h-16 w-16 items-center justify-center rounded-xl text-white text-2xl font-bold"
+                style={{ backgroundColor: accent }}
+              >
+                {logo ? <img src={logo} alt={`Prévia da foto de ${name}`} className="h-full w-full rounded-xl object-cover" /> : name.charAt(0) || '?'}
+              </div>
+              <input ref={logoInputRef} type="file" accept="image/*" className="sr-only" onChange={(event) => void chooseLogo(event.target.files?.[0])} />
+              <Button type="button" variant="outline" size="sm" disabled={uploadingLogo} onClick={() => logoInputRef.current?.click()}>
+                <Upload className="h-4 w-4 mr-2" />
+                {uploadingLogo ? 'Carregando...' : 'Escolher foto'}
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Cor de Destque da Marca</Label>
+            <div className="flex flex-wrap gap-3">
+              {colorOptions.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setAccent(c)}
+                  className={cn(
+                    'h-10 w-10 rounded-lg border-2 transition-all',
+                    accent === c ? 'border-foreground scale-110' : 'border-transparent'
+                  )}
+                  style={{ backgroundColor: c }}
+                >
+                  {accent === c && <Check className="h-4 w-4 text-white mx-auto" />}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="whatsapp">WhatsApp para Notificações</Label>
+            <Input
+              id="whatsapp"
+              value={whatsapp}
+              onChange={(e) => setWhatsapp(e.target.value)}
+              placeholder="5511999999999"
+            />
+            <p className="text-xs text-muted-foreground">Usado para receber pedidos e avisos de agendamento</p>
+          </div>
+
+          <Button onClick={saveIdentity}>
+            Salvar alterações
+          </Button>
+        </Card>}
+        {est.modules.delivery && hasStorePermission(user, est.id, 'delivery') && <DeliveryStoreSettings establishmentId={est.id} />}
+        {hasStorePermission(user, est.id, 'manage-users') && <StoreUserManagement establishment={est} />}
+      </div>
+    );
+  }
+}
+
+function SidebarItem({ icon: Icon, label, active, onClick }: {
+  icon: typeof Home; label: string; active: boolean; onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'flex w-full items-center justify-center gap-3 rounded-lg px-2 py-2.5 text-sm font-medium transition-colors md:justify-start md:px-3',
+        active
+          ? 'bg-primary/10 text-primary ring-1 ring-inset ring-primary/10'
+          : 'text-muted-foreground hover:bg-slate-100/80 hover:text-foreground dark:hover:bg-slate-800/70'
+      )}
+      title={label}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="hidden truncate md:block">{label}</span>
+    </button>
+  );
+}
+
+function MiniStat({ icon: Icon, label, value, color }: {
+  icon: typeof Home; label: string; value: string; color: string;
+}) {
+  return (
+    <Card className="p-6">
+      <div className="flex items-center gap-3">
+        <div className={cn('flex h-12 w-12 shrink-0 items-center justify-center rounded-xl', color)}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <div>
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</p>
+          <p className="text-3xl font-bold text-slate-900 dark:text-slate-50">{value}</p>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+async function resizeLogo(file: File): Promise<Blob> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, 512 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const context = canvas.getContext('2d');
+  if (!context) { bitmap.close(); throw new Error('Não foi possível processar a imagem.'); }
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Não foi possível converter a imagem.')), 'image/jpeg', 0.82);
+  });
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Não foi possível ler a imagem.'));
+    reader.onerror = () => reject(new Error('Não foi possível ler a imagem.'));
+    reader.readAsDataURL(blob);
+  });
+}
