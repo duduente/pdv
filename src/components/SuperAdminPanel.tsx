@@ -3,6 +3,7 @@ import {
   Building2, Users, DollarSign, TrendingUp, Search, MoreVertical,
   ExternalLink, Pencil, Copy, CalendarClock, UtensilsCrossed,
   Calculator, Package, Star, Activity, Plus, Trash2, ClipboardList, Bike,
+  WalletCards, Store,
 } from 'lucide-react';
 import { useApp } from '@/store';
 import { MODULE_LABELS, formatCurrency } from '@/mockData';
@@ -24,6 +25,8 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
 import { UserManagementDialog } from '@/components/UserManagementDialog';
+import { SupportInbox } from '@/components/SupportInbox';
+import { AdminBillingPanel } from '@/components/modules/AdminBillingPanel';
 
 const MODULE_META: Record<ModuleKey, { label: string; icon: typeof CalendarClock }> = {
   agendamento: { label: 'Agendamento Online', icon: CalendarClock },
@@ -40,6 +43,7 @@ export function SuperAdminPanel() {
   const [editTarget, setEditTarget] = useState<Establishment | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [usersOpen, setUsersOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'stores' | 'finances'>('stores');
 
   const filtered = establishments.filter(
     (e) =>
@@ -81,6 +85,19 @@ export function SuperAdminPanel() {
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 animate-fade-in sm:px-6 lg:px-8">
+      <SupportInbox />
+      <div className="flex flex-wrap gap-2 border-b pb-3" role="tablist" aria-label="Painel Super Admin">
+        <Button type="button" role="tab" aria-selected={activeTab === 'stores'} variant={activeTab === 'stores' ? 'default' : 'outline'} onClick={() => setActiveTab('stores')}>
+          <Store className="mr-2 h-4 w-4" />Lojas
+        </Button>
+        <Button type="button" role="tab" aria-selected={activeTab === 'finances'} variant={activeTab === 'finances' ? 'default' : 'outline'} onClick={() => setActiveTab('finances')}>
+          <WalletCards className="mr-2 h-4 w-4" />Finanças do Kito
+        </Button>
+      </div>
+      {activeTab === 'finances' ? (
+        <AdminBillingPanel establishments={establishments} />
+      ) : (
+      <>
       {/* Stats Cards */}
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
@@ -93,9 +110,9 @@ export function SuperAdminPanel() {
         />
         <StatCard
           icon={DollarSign}
-          label="Receita Mensal Estimada"
+          label="Mensalidades Ativas"
           value={formatCurrency(totalRevenue)}
-          sub="Recorrente"
+          sub="Soma mensal das lojas ativas"
           color="text-emerald-600"
           bg="bg-emerald-50"
         />
@@ -162,6 +179,7 @@ export function SuperAdminPanel() {
                 <TableHead className="min-w-[180px]">Estabelecimento</TableHead>
                 <TableHead>Proprietário</TableHead>
                 <TableHead>Plano</TableHead>
+                <TableHead>Mensalidade</TableHead>
                 <TableHead>Módulos</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Link Público</TableHead>
@@ -200,6 +218,7 @@ export function SuperAdminPanel() {
                         {est.plan}
                       </Badge>
                     </TableCell>
+                    <TableCell className="whitespace-nowrap">{formatCurrency(est.monthlyRevenue)}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-1">
                         {activeModules.length === 0 ? (
@@ -284,7 +303,7 @@ export function SuperAdminPanel() {
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => setEditTarget(est)}>
                             <Pencil className="mr-2 h-4 w-4" />
-                            Editar módulos
+                            Editar loja
                           </DropdownMenuItem>
                           <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => void removeEstablishment(est)}>
                             <Trash2 className="mr-2 h-4 w-4" />
@@ -312,6 +331,8 @@ export function SuperAdminPanel() {
           </Table>
         </div>
       </Card>
+      </>
+      )}
 
       {/* Edit Modal */}
       {editTarget && (
@@ -361,6 +382,7 @@ function CreateEstablishmentModal({
   const [email, setEmail] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
   const [plan, setPlan] = useState('Plano Profissional');
+  const [monthlyRevenue, setMonthlyRevenue] = useState('0');
   const [modules, setModules] = useState<Record<ModuleKey, boolean>>({
     agendamento: false,
     cardapio: false,
@@ -381,6 +403,8 @@ function CreateEstablishmentModal({
     if (!slug) { setError('Informe um nome que possa ser usado como endereço da loja.'); return; }
     if (existingSlugs.includes(slug)) { setError('Já existe uma loja com este nome/endereço.'); return; }
     if (!Object.values(modules).some(Boolean)) { setError('Ative pelo menos um módulo.'); return; }
+    const parsedMonthlyRevenue = Number(monthlyRevenue);
+    if (!Number.isFinite(parsedMonthlyRevenue) || parsedMonthlyRevenue < 0) { setError('Informe uma mensalidade válida, maior ou igual a zero.'); return; }
     onCreate({
       id: globalThis.crypto?.randomUUID?.() ?? `est-${Date.now()}`,
       slug,
@@ -388,7 +412,7 @@ function CreateEstablishmentModal({
       owner: owner.trim(),
       email: email.trim(),
       plan: plan.trim() || 'Plano Personalizado',
-      monthlyRevenue: 0,
+      monthlyRevenue: Math.round(parsedMonthlyRevenue * 100) / 100,
       status: 'active',
       modules,
       theme: { name: name.trim(), logo: '', accentColor: '#4f46e5' },
@@ -411,6 +435,7 @@ function CreateEstablishmentModal({
             <label className="space-y-1 text-sm font-medium">E-mail<Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="contato@empresa.com" /></label>
             <label className="space-y-1 text-sm font-medium">WhatsApp (opcional)<Input value={whatsapp} onChange={(event) => setWhatsapp(event.target.value)} placeholder="5511999999999" /></label>
             <label className="space-y-1 text-sm font-medium sm:col-span-2">Plano<Input value={plan} onChange={(event) => setPlan(event.target.value)} /></label>
+            <label className="space-y-1 text-sm font-medium sm:col-span-2">Mensalidade (R$)<Input type="number" min="0" step="0.01" value={monthlyRevenue} onChange={(event) => setMonthlyRevenue(event.target.value)} /></label>
           </div>
           <div className="rounded-md border p-4">
             <h3 className="mb-2 text-sm font-semibold">Módulos</h3>
@@ -460,6 +485,8 @@ function EditEstablishmentModal({
   const [owner, setOwner] = useState(establishment.owner);
   const [email, setEmail] = useState(establishment.email);
   const [plan, setPlan] = useState(establishment.plan);
+  const [monthlyRevenue, setMonthlyRevenue] = useState(String(establishment.monthlyRevenue));
+  const [monthlyRevenueError, setMonthlyRevenueError] = useState('');
   const [status, setStatus] = useState(establishment.status);
   const [whatsapp, setWhatsapp] = useState(establishment.whatsapp);
   const [accentColor, setAccentColor] = useState(establishment.theme.accentColor);
@@ -478,7 +505,7 @@ function EditEstablishmentModal({
             Editar Estabelecimento
           </DialogTitle>
           <DialogDescription>
-            Configure os módulos e dados do cliente.
+            Configure os dados, a mensalidade e os módulos do cliente.
           </DialogDescription>
         </DialogHeader>
 
@@ -505,6 +532,11 @@ function EditEstablishmentModal({
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Plano</label>
               <Input value={plan} onChange={(e) => setPlan(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Mensalidade (R$)</label>
+              <Input type="number" min="0" step="0.01" value={monthlyRevenue} onChange={(e) => { setMonthlyRevenue(e.target.value); setMonthlyRevenueError(''); }} />
+              {monthlyRevenueError && <p role="alert" className="text-xs text-destructive">{monthlyRevenueError}</p>}
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Status</label>
@@ -548,16 +580,24 @@ function EditEstablishmentModal({
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => onSave({
-            name: name.trim(),
-            owner: owner.trim(),
-            email: email.trim(),
-            plan: plan.trim(),
-            status,
-            modules,
-            whatsapp: whatsapp.replace(/\D/g, ''),
-            theme: { ...establishment.theme, name: name.trim(), accentColor },
-          })}>
+          <Button onClick={() => {
+            const monthlyAmount = Number(monthlyRevenue);
+            if (!Number.isFinite(monthlyAmount) || monthlyAmount < 0) {
+              setMonthlyRevenueError('Informe um valor válido, maior ou igual a zero.');
+              return;
+            }
+            onSave({
+              name: name.trim(),
+              owner: owner.trim(),
+              email: email.trim(),
+              plan: plan.trim(),
+              monthlyRevenue: Math.round(monthlyAmount * 100) / 100,
+              status,
+              modules,
+              whatsapp: whatsapp.replace(/\D/g, ''),
+              theme: { ...establishment.theme, name: name.trim(), accentColor },
+            });
+          }}>
             Salvar alterações
           </Button>
         </DialogFooter>

@@ -173,6 +173,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const updated = { ...current, ...updates, theme: updates.theme ?? current.theme };
       const { error } = await supabase.from('establishments').update({
         name: updated.name, owner: updated.owner, email: updated.email, plan: updated.plan,
+        monthly_revenue: updated.monthlyRevenue,
         status: updated.status, modules: updated.modules, theme: updated.theme,
         whatsapp: updated.whatsapp, template: updated.template ?? null,
       }).eq('id', id);

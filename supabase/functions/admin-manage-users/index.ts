@@ -99,7 +99,7 @@ Deno.serve(async (request) => {
       const allowedPermissions = new Set([
         'dashboard', 'agendamento', 'cardapio', 'estoque', 'comandas', 'delivery',
         'pdv-sales', 'pdv-movements', 'pdv-reports', 'pdv-sessions',
-        'store-settings', 'manage-users',
+        'finance', 'store-settings', 'manage-users',
       ]);
       if (!email || !username || password.length < 8 || !permissions.length || permissions.some((permission) => !allowedPermissions.has(permission))) {
         return respond({ error: 'E-mail, usuário, senha de pelo menos 8 caracteres e permissões válidas são obrigatórios.' }, 400);

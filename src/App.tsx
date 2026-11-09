@@ -8,6 +8,7 @@ import { SuperAdminPanel } from './components/SuperAdminPanel';
 import { MerchantPanel } from './components/MerchantPanel';
 import { PublicBookingPage } from './components/PublicBookingPage';
 import { PublicMenuPage } from './components/PublicMenuPage';
+import { PublicOrderTrackingPage } from './components/PublicOrderTrackingPage';
 import { Toaster } from './components/ui/sonner';
 
 function AppContent() {
@@ -27,8 +28,8 @@ function AppContent() {
                 <Layers className="h-4.5 w-4.5" />
               </div>
               <div>
-                <span className="block text-sm font-bold leading-tight">Soluções Digitais</span>
-                <span className="block text-[11px] text-muted-foreground">Workspace</span>
+                <span className="block text-sm font-bold leading-tight">Kito PDV</span>
+                <span className="block text-[11px] text-muted-foreground">Gestão comercial</span>
               </div>
             </div>
             {selectedEstablishment && <span className="ml-auto truncate text-sm font-medium text-muted-foreground">{selectedEstablishment.name}</span>}
@@ -64,7 +65,7 @@ function AppContent() {
 function AuthenticatedApp() {
   const { user, loading } = useAuth();
   if (loading) return <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">Verificando sessão...</div>;
-  if (!user) return <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} storageKey="solucoes-theme"><LoginPage /></ThemeProvider>;
+  if (!user) return <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} storageKey="kito-pdv-theme"><LoginPage /></ThemeProvider>;
   return <AppProvider key={user.id}><ThemedAppContent /></AppProvider>;
 }
 
@@ -73,16 +74,20 @@ function ThemedAppContent() {
   const isPublicPage = screen === 'public-booking' || screen === 'public-menu';
 
   return (
-    <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} storageKey="solucoes-theme" forcedTheme={isPublicPage ? 'light' : undefined}>
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} storageKey="kito-pdv-theme" forcedTheme={isPublicPage ? 'light' : undefined}>
       <AppContent />
     </ThemeProvider>
   );
 }
 
 function App() {
+  const trackingToken = new URLSearchParams(window.location.search).get('acompanhar');
+
   return (
     <AuthProvider>
-      <AuthenticatedApp />
+      {trackingToken
+        ? <PublicOrderTrackingPage token={trackingToken} />
+        : <AuthenticatedApp />}
       <Toaster position="top-right" richColors />
     </AuthProvider>
   );

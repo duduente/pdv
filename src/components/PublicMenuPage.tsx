@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import {
-  ArrowLeft, Plus, Minus, ShoppingBag, X, MessageCircle,
+  ArrowLeft, Plus, Minus, ShoppingBag, X, MessageCircle, ExternalLink, Copy,
   Trash2, UtensilsCrossed, Check,
 } from 'lucide-react';
 import { useApp } from '@/store';
@@ -29,6 +29,7 @@ export function PublicMenuPage() {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [orderSent, setOrderSent] = useState(false);
+  const [trackingLink, setTrackingLink] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [address, setAddress] = useState('');
   const [postalCode, setPostalCode] = useState('');
@@ -111,10 +112,17 @@ export function PublicMenuPage() {
   };
 
   const sendOrder = (splits: PaymentSplit[]) => {
+    const trackingToken = globalThis.crypto?.randomUUID?.();
+    if (!trackingToken) {
+      toast.error('Não foi possível gerar um link seguro para acompanhar o pedido. Atualize o navegador e tente novamente.');
+      return;
+    }
+    const orderTrackingLink = `${window.location.origin}/?acompanhar=${trackingToken}`;
     const items = cart.map((i) => `*${i.quantity}x* ${i.name} — ${formatCurrency(i.price * i.quantity)}`).join('\n');
     const paymentDescription = splits.map((split) => `${paymentLabels[split.method]}: ${formatCurrency(split.amount)}`).join(' + ');
-    const msg = `*NOVO PEDIDO - ${est.name}*\n\n${items}\n\nEntrega: ${formatCurrency(deliverySettings.deliveryFee)}\n*Total: ${formatCurrency(totalWithDelivery)}*\n\nCliente: ${customerName.trim()}\nTelefone: ${phone.trim()}\nCEP: ${formatPostalCode(postalCode)}\nEndereço: ${address.trim()}\nPagamento informado: ${paymentDescription}`;
-    window.open(`https://wa.me/${est.whatsapp}?text=${encodeURIComponent(msg)}`, '_blank');
+    const msg = `*NOVO PEDIDO - ${est.name}*\n\n*Modalidade: ENTREGA*\n\n${items}\n\nEntrega: ${formatCurrency(deliverySettings.deliveryFee)}\n*Total: ${formatCurrency(totalWithDelivery)}*\n\nCliente: ${customerName.trim()}\nTelefone: ${phone.trim()}\nCEP: ${formatPostalCode(postalCode)}\nEndereço: ${address.trim()}\nPagamento informado: ${paymentDescription}\n\nAcompanhe o status do pedido: ${orderTrackingLink}`;
+    const whatsappWindow = window.open(`https://wa.me/${est.whatsapp}?text=${encodeURIComponent(msg)}`, '_blank');
+    if (!whatsappWindow) toast.error('O navegador bloqueou a abertura do WhatsApp. O pedido será salvo e você poderá copiar o link de acompanhamento.');
     const order: MenuOrder = {
       id: globalThis.crypto?.randomUUID?.() ?? `order-${Date.now()}`,
       establishmentId: est.id,
@@ -123,6 +131,8 @@ export function PublicMenuPage() {
       total: Math.round(cartTotal * 100) / 100,
       status: 'pending',
       channel: 'website',
+      orderType: 'delivery',
+      trackingToken,
       customerName: customerName.trim(),
       address: address.trim(),
       postalCode: digitsOnly(postalCode),
@@ -136,6 +146,7 @@ export function PublicMenuPage() {
     setOrders((previous) => [...previous, order]);
     setPaymentMethod(splits[0].method);
     setOrderSent(true);
+    setTrackingLink(orderTrackingLink);
     setCart([]);
     setCustomerName('');
     setAddress('');
@@ -146,33 +157,48 @@ export function PublicMenuPage() {
     setDocument('');
     setCheckoutOpen(false);
     setCartOpen(false);
-    setTimeout(() => setOrderSent(false), 5000);
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-slate-50">
       {/* Header */}
       <div className="sticky top-0 z-20 shadow-sm" style={{ backgroundColor: accent }}>
-        <div className="max-w-md mx-auto flex items-center gap-3 px-4 py-3 text-white">
+        <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 text-white sm:px-6 lg:px-8">
           <Button variant="ghost" size="icon" className="text-white hover:bg-white/20" onClick={goBack}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/20 text-white font-bold">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white/20 text-lg font-bold text-white">
               {est.theme.logo ? <img src={est.theme.logo} alt={`Logo de ${est.name}`} className="h-full w-full rounded-lg object-cover" /> : est.name.charAt(0)}
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="font-semibold leading-tight">{est.name}</p>
-              <p className="text-xs text-white/80">Cardápio Digital</p>
+              <p className="text-xs text-white/80">Cardápio digital · peça online</p>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="max-w-md mx-auto pb-24">
+      <main className="mx-auto max-w-7xl px-4 pb-28 sm:px-6 lg:px-8">
+        <section className="py-8 sm:py-10 lg:py-12">
+          <div className="flex flex-col justify-between gap-4 rounded-3xl border bg-white p-6 shadow-sm sm:p-8 lg:flex-row lg:items-end lg:p-10">
+            <div className="max-w-2xl">
+              <p className="mb-2 text-sm font-semibold uppercase tracking-[0.18em]" style={{ color: accent }}>Peça agora</p>
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">{est.name}</h1>
+              <p className="mt-3 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">
+                Escolha seus favoritos, adicione à sacola e envie seu pedido diretamente para a loja.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2 text-sm text-slate-600">
+              <span className="rounded-full bg-slate-100 px-3 py-1.5">Entrega disponível</span>
+              <span className="rounded-full bg-slate-100 px-3 py-1.5">{menuItems.length} {menuItems.length === 1 ? 'produto' : 'produtos'}</span>
+            </div>
+          </div>
+        </section>
+
         {/* Category tabs */}
-        <div className="sticky top-[57px] z-10 bg-gray-50 pt-3 pb-2">
-          <div className="flex gap-2 overflow-x-auto scrollbar-thin px-4">
+        <div className="sticky top-[65px] z-10 -mx-4 bg-slate-50/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+          <div className="flex gap-2 overflow-x-auto scrollbar-thin">
             <CatButton label="Todos" active={activeCat === 'all'} onClick={() => setActiveCat('all')} accent={accent} />
             {menuCategories.map((c) => (
               <CatButton
@@ -187,39 +213,47 @@ export function PublicMenuPage() {
         </div>
 
         {/* Menu items */}
-        <div className="px-4 space-y-3 mt-2">
-          {filtered.map((item) => (
-            <Card key={item.id} className="overflow-hidden flex gap-0 hover:shadow-md transition-shadow animate-fade-in">
-              <div className="flex-1 p-3 flex flex-col justify-between">
-                <div>
-                  <p className="font-semibold text-sm">{item.name}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{item.description}</p>
+        {filtered.length ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {filtered.map((item) => (
+              <Card key={item.id} className="group flex h-full flex-col overflow-hidden border-slate-200/80 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg animate-fade-in">
+                <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
+                  <img src={item.image} alt={item.name} className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" loading="lazy" />
                 </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="font-bold" style={{ color: accent }}>{formatCurrency(item.price)}</span>
-                  <Button
-                    size="sm"
-                    className="h-8 px-3"
-                    style={{ backgroundColor: accent }}
-                    onClick={() => addToCart(item.id, item.name, item.price, item.image)}
-                  >
-                    <Plus className="h-4 w-4 mr-1" />
-                    Adicionar
-                  </Button>
+                <div className="flex flex-1 flex-col p-4">
+                  <div className="flex-1">
+                    <p className="text-base font-semibold text-slate-900">{item.name}</p>
+                    {item.description && <p className="mt-1.5 line-clamp-2 min-h-10 text-sm leading-5 text-slate-500">{item.description}</p>}
+                  </div>
+                  <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
+                    <span className="text-lg font-bold" style={{ color: accent }}>{formatCurrency(item.price)}</span>
+                    <Button
+                      size="sm"
+                      className="rounded-full px-4"
+                      style={{ backgroundColor: accent }}
+                      onClick={() => addToCart(item.id, item.name, item.price, item.image)}
+                    >
+                      <Plus className="mr-1 h-4 w-4" />
+                      Adicionar
+                    </Button>
+                  </div>
                 </div>
-              </div>
-              <div className="relative min-h-24 w-24 shrink-0 self-stretch overflow-hidden bg-slate-100">
-                <img src={item.image} alt={item.name} className="absolute inset-0 h-full w-full object-cover" loading="lazy" />
-              </div>
-            </Card>
-          ))}
-        </div>
-      </div>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <Card className="flex flex-col items-center justify-center px-6 py-16 text-center">
+            <UtensilsCrossed className="mb-3 h-9 w-9 text-slate-300" />
+            <h2 className="font-semibold text-slate-800">{menuItems.length ? 'Nenhum item nesta categoria' : 'Cardápio em preparação'}</h2>
+            <p className="mt-1 text-sm text-slate-500">{menuItems.length ? 'Escolha outra categoria para ver os produtos.' : 'A loja ainda não cadastrou produtos no cardápio.'}</p>
+          </Card>
+        )}
+      </main>
 
       {/* Floating cart button */}
       {cartCount > 0 && !cartOpen && (
         <div className="fixed bottom-4 left-0 right-0 z-20 px-4">
-          <div className="max-w-md mx-auto">
+          <div className="mx-auto max-w-xl">
             <Button
               className="w-full h-14 shadow-lg gap-3 text-base"
               style={{ backgroundColor: accent }}
@@ -239,7 +273,7 @@ export function PublicMenuPage() {
       {cartOpen && (
         <div className="fixed inset-0 z-30 flex justify-end">
           <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={() => setCartOpen(false)} />
-          <div className="relative w-full max-w-md bg-card h-full flex flex-col animate-slide-up">
+          <div className="relative flex h-full w-full max-w-md flex-col bg-card animate-slide-up">
             <div className="flex items-center justify-between p-4 border-b" style={{ backgroundColor: accent }}>
               <h2 className="font-semibold text-white flex items-center gap-2">
                 <ShoppingBag className="h-5 w-5" />
@@ -354,14 +388,38 @@ export function PublicMenuPage() {
       {orderSent && (
         <div className="fixed bottom-4 left-0 right-0 z-50 px-4">
           <div className="max-w-md mx-auto">
-            <Card className="p-4 flex items-center gap-3 animate-slide-up border-emerald-200 bg-emerald-50">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500">
+            <Card className="flex animate-slide-up items-start gap-3 border-emerald-200 bg-emerald-50 p-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500">
                 <Check className="h-5 w-5 text-white" />
               </div>
-              <div>
+              <div className="min-w-0 flex-1">
                 <p className="font-semibold text-emerald-800">Pedido enviado!</p>
-                <p className="text-xs text-emerald-600">Aguarde a confirmação no WhatsApp</p>
+                <p className="mb-2 text-xs text-emerald-700">Acompanhe o andamento do pedido pelo link seguro:</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button asChild size="sm" style={{ backgroundColor: accent }}>
+                    <a href={trackingLink} target="_blank" rel="noreferrer"><ExternalLink className="mr-1 h-3.5 w-3.5" />Acompanhar pedido</a>
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => {
+                    if (!navigator.clipboard) {
+                      toast.error('A cópia do link não está disponível neste navegador.');
+                      return;
+                    }
+                    void navigator.clipboard.writeText(trackingLink)
+                      .then(() => toast.success('Link de acompanhamento copiado'))
+                      .catch(() => toast.error('Não foi possível copiar o link'));
+                  }}><Copy className="mr-1 h-3.5 w-3.5" />Copiar link</Button>
+                </div>
               </div>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 shrink-0 text-emerald-800"
+                aria-label="Fechar confirmação do pedido"
+                onClick={() => setOrderSent(false)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
             </Card>
           </div>
         </div>

@@ -20,6 +20,7 @@ const PERMISSION_LABELS: Record<AppPermission, string> = {
   'pdv-movements': 'Caixa · Movimentações e extratos',
   'pdv-reports': 'Caixa · Relatórios',
   'pdv-sessions': 'Caixa · Abertura e fechamento',
+  finance: 'Finanças · Boletos e mensalidades',
   'store-settings': 'Configurações da loja',
   'manage-users': 'Criar e remover subusuários',
 };
@@ -31,6 +32,18 @@ const MODULE_PERMISSIONS: Partial<Record<ModuleKey, AppPermission>> = {
   comandas: 'comandas',
   delivery: 'delivery',
 };
+
+const PERMISSION_PRESETS: { label: string; permissions: AppPermission[] }[] = [
+  { label: 'Atendente', permissions: ['dashboard', 'pdv-sales'] },
+  { label: 'Caixa', permissions: ['dashboard', 'pdv-sales', 'pdv-movements', 'pdv-sessions'] },
+  {
+    label: 'Gerente',
+    permissions: [
+      'dashboard', 'agendamento', 'cardapio', 'estoque', 'comandas', 'delivery',
+      'pdv-sales', 'pdv-movements', 'pdv-reports', 'pdv-sessions',
+    ],
+  },
+];
 
 export function StoreUserManagement({ establishment }: { establishment: Establishment }) {
   const { createStoreUser, listStoreUsers, deleteStoreUser, user, authConfigured } = useAuth();
@@ -64,6 +77,10 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
     setPermissions((current) => current.includes(permission)
       ? current.filter((entry) => entry !== permission)
       : [...current, permission]);
+  };
+
+  const applyPermissionPreset = (preset: AppPermission[]) => {
+    setPermissions(availablePermissions.filter((permission) => preset.includes(permission)));
   };
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
@@ -119,6 +136,22 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
         </div>
         <fieldset className="space-y-2 rounded-md border p-3">
           <legend className="px-1 text-sm font-semibold">Permissões de acesso</legend>
+          <div className="space-y-2 border-b pb-3">
+            <p className="text-xs text-muted-foreground">Atalhos de perfil — as permissões podem ser ajustadas abaixo.</p>
+            <div className="flex flex-wrap gap-2">
+              {PERMISSION_PRESETS.map((preset) => (
+                <Button key={preset.label} type="button" size="sm" variant="outline" onClick={() => applyPermissionPreset(preset.permissions)}>
+                  {preset.label}
+                </Button>
+              ))}
+              <Button type="button" size="sm" variant="ghost" onClick={() => setPermissions([])}>
+                Limpar seleção
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              O perfil Gerente não inclui acesso a finanças, configurações da loja ou gestão de subusuários.
+            </p>
+          </div>
           <div className="grid gap-x-6 sm:grid-cols-2">
             {availablePermissions.map((permission) => (
               <label key={permission} className="flex items-center gap-2 py-1.5 text-sm">

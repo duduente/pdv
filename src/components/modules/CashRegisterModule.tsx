@@ -1,6 +1,6 @@
 import { useState, type Dispatch, type SetStateAction } from 'react';
 import {
-  ArrowDownCircle, ArrowUpCircle, Banknote, BarChart3, Calculator, ClipboardList,
+  ArrowDownCircle, ArrowUpCircle, Banknote, BarChart3, Calculator, ClipboardList, Download,
   CreditCard, DollarSign, LockKeyhole, Plus, Receipt, Search,
   Smartphone, Trash2, TrendingUp, UnlockKeyhole, Wallet, Undo2,
 } from 'lucide-react';
@@ -10,8 +10,9 @@ import { useApp } from '@/store';
 import { useAuth } from '@/auth/AuthContext';
 import { hasStorePermission } from '@/auth/permissions';
 import { usePersistentState } from '@/hooks/usePersistentState';
+import { calculateExpectedCash, calculateProfitSummary, closeCashSession, getPeriodRange, isDateInReportPeriod, reverseInventorySale, type ReportPeriod } from '@/lib/criticalFlows';
 import type {
-  Appointment, CashMovement, CashRegisterData, CashSale, CashSession,
+  Appointment, CashExpense, CashMovement, CashRegisterData, CashSale, CashSession, DeliveryDriver, InventoryMovement,
   MenuItem, MenuOrder, ModuleKey, PaymentMethod, PaymentSplit, Product, Professional, SaleItem, SaleOrigin, Service,
   Command,
 } from '@/types';
@@ -22,12 +23,19 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
+import {
+  Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from 'recharts';
+import { ChartTypeSelector } from '@/components/ChartTypeSelector';
+import type { ChartType } from '@/components/ChartTypeSelector';
 import { PaymentDialog } from '@/components/modules/PaymentDialog';
+import { AuditHistory } from '@/components/modules/AuditHistory';
+import { appendAuditEvent, createAuditEvent } from '@/lib/auditLog';
 
-type Period = 'day' | 'week' | 'month';
+type Period = ReportPeriod;
 
 const EMPTY_REGISTER: CashRegisterData = { activeSessionId: null, sessions: [], sales: [], movements: [] };
-const PERIOD_LABELS: Record<Period, string> = { day: 'Hoje', week: 'Esta semana', month: 'Este mês' };
+const PERIOD_LABELS: Record<Period, string> = { day: 'Diário', week: 'Semanal', month: 'Mensal', year: 'Anual' };
 const SOURCE_LABELS: Record<SaleOrigin, string> = {
   agendamento: 'Agendamento / serviço',
   cardapio: 'Cardápio / comanda',
@@ -52,17 +60,76 @@ function money(value: number) {
   return formatCurrency(value);
 }
 
-function periodStart(period: Period) {
-  const now = new Date();
-  if (period === 'day') return new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (period === 'month') return new Date(now.getFullYear(), now.getMonth(), 1);
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-  return monday;
+function dateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-function isInPeriod(date: string, period: Period) {
-  return new Date(date) >= periodStart(period);
+function reportChartData(period: Period, referenceDate: string, sales: CashSale[], expenses: CashExpense[]) {
+  const { start, end } = getPeriodRange(period, referenceDate);
+  const buckets: { key: string; label: string }[] = [];
+
+  if (period === 'day') {
+    for (let hour = 0; hour < 24; hour += 1) {
+      buckets.push({ key: String(hour), label: `${String(hour).padStart(2, '0')}h` });
+    }
+  } else if (period === 'year') {
+    const month = new Date(start);
+    while (month < end) {
+      buckets.push({
+        key: String(month.getMonth()),
+        label: month.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''),
+      });
+      month.setMonth(month.getMonth() + 1);
+    }
+  } else {
+    const date = new Date(start);
+    while (date < end) {
+      buckets.push({
+        key: dateKey(date),
+        label: period === 'week'
+          ? date.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit' }).replace('.', '')
+          : String(date.getDate()),
+      });
+      date.setDate(date.getDate() + 1);
+    }
+  }
+
+  const data = buckets.map((bucket) => ({ ...bucket, sales: 0, expenses: 0 }));
+  const dataByKey = new Map(data.map((bucket) => [bucket.key, bucket]));
+  const keyForDate = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    if (period === 'day') return String(date.getHours());
+    if (period === 'year') return String(date.getMonth());
+    return dateKey(date);
+  };
+
+  for (const sale of sales) {
+    if (sale.status === 'cancelled') continue;
+    const key = keyForDate(sale.createdAt);
+    const bucket = key ? dataByKey.get(key) : undefined;
+    if (bucket) bucket.sales += sale.total;
+  }
+  for (const expense of expenses) {
+    if (expense.cancelledAt) continue;
+    const key = keyForDate(expense.createdAt);
+    const bucket = key ? dataByKey.get(key) : undefined;
+    if (bucket) bucket.expenses += expense.amount;
+  }
+
+  return data;
+}
+
+function periodDescription(period: Period, referenceDate: string) {
+  const { start, end } = getPeriodRange(period, referenceDate);
+  if (period === 'day') return start.toLocaleDateString('pt-BR');
+  if (period === 'week') {
+    const lastDay = new Date(end);
+    lastDay.setDate(lastDay.getDate() - 1);
+    return `${start.toLocaleDateString('pt-BR')} a ${lastDay.toLocaleDateString('pt-BR')}`;
+  }
+  if (period === 'month') return start.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  return String(start.getFullYear());
 }
 
 function summarize(sales: CashSale[]) {
@@ -109,11 +176,13 @@ export function CashRegisterModule() {
     `inventory:${establishmentId}`,
     selectedEstablishment?.modules.estoque && selectedEstablishment.slug === 'mercadinho-central' ? initialProducts : [],
   );
+  const [, setInventoryMovements] = usePersistentState<InventoryMovement[]>(`inventory-movements:${establishmentId}`, []);
   const [menuItems] = usePersistentState<MenuItem[]>(
     `menu-items:${establishmentId}`,
     selectedEstablishment?.modules.cardapio && selectedEstablishment.slug === 'burger-house' ? initialMenuItems : [],
   );
   const [orders, setOrders] = usePersistentState<MenuOrder[]>(`menu-orders:${establishmentId}`, []);
+  const [drivers] = usePersistentState<DeliveryDriver[]>(`delivery-drivers:${establishmentId}`, []);
   const [commands, setCommands] = usePersistentState<Command[]>(`commands:${establishmentId}`, []);
   const [services] = usePersistentState<Service[]>(
     `services:${establishmentId}`,
@@ -136,27 +205,51 @@ export function CashRegisterModule() {
   const cancelSale = (sale: CashSale) => {
     if (sale.status === 'cancelled') return;
     if (!window.confirm(`Cancelar a venda de ${money(sale.total)}? O estoque/pedido/agendamento relacionado será estornado.`)) return;
+    const cancellationReason = window.prompt('Informe o motivo obrigatório do cancelamento/estorno:')?.trim();
+    if (!cancellationReason) {
+      toast.error('O motivo é obrigatório. O cancelamento foi interrompido.');
+      return;
+    }
     const cancelledAt = new Date().toISOString();
+    const auditEvent = createAuditEvent(user, {
+      entityType: 'sale',
+      entityId: sale.id,
+      action: 'cancelled',
+      occurredAt: cancelledAt,
+      summary: `Venda de ${money(sale.total)} cancelada e estornada. Motivo: ${cancellationReason}`,
+    });
+    const sourceIds = new Set(sale.items.map((item) => item.sourceRecordId).filter((id): id is string => Boolean(id)));
+    const orderEvents = (sale.origin === 'cardapio' || sale.origin === 'delivery')
+      ? orders.filter((order) => sourceIds.has(order.id)).map((order) => createAuditEvent(user, {
+        entityType: 'order',
+        entityId: order.id,
+        action: 'status_changed',
+        occurredAt: cancelledAt,
+        summary: 'Pagamento cancelado; pedido voltou para pendente.',
+      }))
+      : [];
     setRegister((current) => {
-      const sales = current.sales.map((item) => item.id === sale.id ? { ...item, status: 'cancelled' as const, cancelledAt } : item);
-      return {
+      const sales = current.sales.map((item) => item.id === sale.id
+        ? { ...item, status: 'cancelled' as const, cancelledAt, cancellationReason }
+        : item);
+      return orderEvents.reduce((updated, event) => appendAuditEvent(updated, event), appendAuditEvent({
         ...current,
         sales,
         sessions: current.sessions.map((session) => {
           if (session.id !== sale.sessionId || !session.closedAt) return session;
-          const expected = expectedCash(session, sales, current.movements);
+          const expected = calculateExpectedCash(session, sales, current.movements);
           return { ...session, expectedCash: expected, difference: (session.countedCash ?? 0) - expected };
         }),
-      };
+      }, auditEvent));
     });
 
     if (sale.origin === 'produto_estoque') {
-      setProducts((current) => current.map((product) => {
-        const returned = sale.items.filter((item) => item.productId === product.id).reduce((sum, item) => sum + item.quantity, 0);
-        return returned ? { ...product, stock: product.stock + returned } : product;
-      }));
+      const reversed = reverseInventorySale(sale, products, cancelledAt, createId);
+      if (reversed) {
+        setProducts(reversed.products);
+        setInventoryMovements((current) => [...current, ...reversed.movements]);
+      }
     }
-    const sourceIds = new Set(sale.items.map((item) => item.sourceRecordId).filter((id): id is string => Boolean(id)));
     if (sale.origin === 'cardapio' || sale.origin === 'delivery') {
       setOrders((current) => current.map((order) => sourceIds.has(order.id)
         ? sale.origin === 'delivery'
@@ -181,25 +274,48 @@ export function CashRegisterModule() {
       ? `Excluir definitivamente o registro cancelado de ${money(sale.total)}?`
       : `Excluir definitivamente a venda de ${money(sale.total)}? Itens relacionados serão estornados.`;
     if (!window.confirm(`${warning} Esta ação não pode ser desfeita.`)) return;
+    const deletionReason = window.prompt('Informe o motivo obrigatório da exclusão:')?.trim();
+    if (!deletionReason) {
+      toast.error('O motivo é obrigatório. A exclusão foi interrompida.');
+      return;
+    }
+    const deletedAt = new Date().toISOString();
+    const auditEvent = createAuditEvent(user, {
+      entityType: 'sale',
+      entityId: sale.id,
+      action: 'deleted',
+      occurredAt: deletedAt,
+      summary: `Registro de venda de ${money(sale.total)} excluído${alreadyReversed ? ' após estorno' : ''}. Motivo: ${deletionReason}`,
+    });
+    const sourceIds = new Set(sale.items.map((item) => item.sourceRecordId).filter((id): id is string => Boolean(id)));
+    const orderEvents = !alreadyReversed && (sale.origin === 'cardapio' || sale.origin === 'delivery')
+      ? orders.filter((order) => sourceIds.has(order.id)).map((order) => createAuditEvent(user, {
+        entityType: 'order',
+        entityId: order.id,
+        action: 'status_changed',
+        occurredAt: deletedAt,
+        summary: 'Venda excluída e pedido voltou para pendente.',
+      }))
+      : [];
     setRegister((current) => {
       const sales = current.sales.filter((item) => item.id !== sale.id);
-      return {
+      return orderEvents.reduce((updated, event) => appendAuditEvent(updated, event), appendAuditEvent({
         ...current,
         sales,
         sessions: current.sessions.map((session) => {
           if (session.id !== sale.sessionId || !session.closedAt) return session;
-          const expected = expectedCash(session, sales, current.movements);
+          const expected = calculateExpectedCash(session, sales, current.movements);
           return { ...session, expectedCash: expected, difference: (session.countedCash ?? 0) - expected };
         }),
-      };
+      }, auditEvent));
     });
     if (!alreadyReversed && sale.origin === 'produto_estoque') {
-      setProducts((current) => current.map((product) => {
-        const returned = sale.items.filter((item) => item.productId === product.id).reduce((sum, item) => sum + item.quantity, 0);
-        return returned ? { ...product, stock: product.stock + returned } : product;
-      }));
+      const reversed = reverseInventorySale(sale, products, deletedAt, createId);
+      if (reversed) {
+        setProducts(reversed.products);
+        setInventoryMovements((current) => [...current, ...reversed.movements]);
+      }
     }
-    const sourceIds = new Set(sale.items.map((item) => item.sourceRecordId).filter((id): id is string => Boolean(id)));
     if (!alreadyReversed && (sale.origin === 'cardapio' || sale.origin === 'delivery')) {
       setOrders((current) => current.map((order) => sourceIds.has(order.id)
         ? sale.origin === 'delivery'
@@ -242,16 +358,19 @@ export function CashRegisterModule() {
           {canViewSales && <TabsTrigger value="sales">Vendas</TabsTrigger>}
           {canViewMovements && <TabsTrigger value="movements">Movimentações e extratos</TabsTrigger>}
           {canViewReports && <TabsTrigger value="reports">Relatórios</TabsTrigger>}
+          {(canViewSales || canViewReports) && <TabsTrigger value="history">Histórico</TabsTrigger>}
           {canViewSessions && <TabsTrigger value="session">Abertura e fechamento</TabsTrigger>}
         </TabsList>
-        {canViewReports && <TabsContent value="dashboard" className="mt-4"><DashboardTab sales={register.sales} movements={register.movements} /></TabsContent>}
+        {canViewReports && <TabsContent value="dashboard" className="mt-4"><DashboardTab sales={register.sales} movements={register.movements} expenses={register.expenses ?? []} /></TabsContent>}
         {canViewSales && <TabsContent value="sales" className="mt-4">
           <SalesTab
             establishmentId={establishmentId}
+            user={user}
             modules={selectedEstablishment.modules}
             session={activeSession}
             products={products}
             setProducts={setProducts}
+            setInventoryMovements={setInventoryMovements}
             menuItems={menuItems}
             orders={orders}
             setOrders={setOrders}
@@ -266,25 +385,39 @@ export function CashRegisterModule() {
           />
         </TabsContent>}
         {canViewMovements && <TabsContent value="movements" className="mt-4">
-          <MovementsTab establishmentId={establishmentId} session={activeSession} register={register} setRegister={setRegister} />
+          <MovementsTab establishmentId={establishmentId} session={activeSession} register={register} setRegister={setRegister} user={user} />
         </TabsContent>}
-        {canViewReports && <TabsContent value="reports" className="mt-4"><ReportsTab sales={register.sales} movements={register.movements} canManageSales={canViewSales} onCancelSale={cancelSale} onDeleteSale={deleteSale} /></TabsContent>}
+        {canViewReports && <TabsContent value="reports" className="mt-4"><ReportsTab establishmentName={selectedEstablishment.name} sales={register.sales} movements={register.movements} expenses={register.expenses ?? []} auditEvents={register.auditEvents ?? []} orders={orders} drivers={drivers} canManageSales={canViewSales} onCancelSale={cancelSale} onDeleteSale={deleteSale} /></TabsContent>}
+        {(canViewSales || canViewReports) && <TabsContent value="history" className="mt-4"><AuditHistory events={register.auditEvents ?? []} /></TabsContent>}
         {canViewSessions && <TabsContent value="session" className="mt-4">
-          <CashSessionTab establishmentId={establishmentId} register={register} setRegister={setRegister} activeSession={activeSession} />
+          <CashSessionTab establishmentId={establishmentId} register={register} setRegister={setRegister} activeSession={activeSession} user={user} />
         </TabsContent>}
       </Tabs>
     </div>
   );
 }
 
-function PeriodSelector({ value, onChange }: { value: Period; onChange: (period: Period) => void }) {
+function PeriodSelector({
+  value, onChange, referenceDate, onReferenceDateChange,
+}: {
+  value: Period;
+  onChange: (period: Period) => void;
+  referenceDate: string;
+  onReferenceDateChange: (date: string) => void;
+}) {
   return (
-    <div className="inline-flex rounded-md border p-1" role="group" aria-label="Período">
-      {(['day', 'week', 'month'] as const).map((period) => (
-        <Button key={period} type="button" size="sm" variant={value === period ? 'default' : 'ghost'} onClick={() => onChange(period)}>
-          {PERIOD_LABELS[period]}
-        </Button>
-      ))}
+    <div className="flex flex-wrap items-end gap-3">
+      <label className="space-y-1 text-xs font-medium text-muted-foreground">
+        Data de referência
+        <Input type="date" value={referenceDate} onChange={(event) => onReferenceDateChange(event.target.value)} />
+      </label>
+      <div className="inline-flex flex-wrap rounded-md border p-1" role="group" aria-label="Período do relatório">
+        {(['day', 'week', 'month', 'year'] as const).map((period) => (
+          <Button key={period} type="button" size="sm" variant={value === period ? 'default' : 'ghost'} onClick={() => onChange(period)}>
+            {PERIOD_LABELS[period]}
+          </Button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -336,19 +469,26 @@ function SourceBreakdown({ sales }: { sales: CashSale[] }) {
   );
 }
 
-function DashboardTab({ sales, movements }: { sales: CashSale[]; movements: CashMovement[] }) {
+function DashboardTab({ sales, movements, expenses }: {
+  sales: CashSale[];
+  movements: CashMovement[];
+  expenses: CashExpense[];
+}) {
   const [period, setPeriod] = useState<Period>('day');
-  const selectedSales = sales.filter((sale) => sale.status !== 'cancelled' && isInPeriod(sale.createdAt, period));
-  const selectedMovements = movements.filter((movement) => isInPeriod(movement.createdAt, period));
+  const [referenceDate, setReferenceDate] = useState(() => dateKey(new Date()));
+  const selectedSales = sales.filter((sale) => sale.status !== 'cancelled' && isDateInReportPeriod(sale.createdAt, period, referenceDate));
+  const selectedMovements = movements.filter((movement) => !movement.cancelledAt && isDateInReportPeriod(movement.createdAt, period, referenceDate));
+  const selectedExpenses = expenses.filter((expense) => !expense.cancelledAt && isDateInReportPeriod(expense.createdAt, period, referenceDate));
   const summary = summarize(selectedSales);
+  const profit = calculateProfitSummary(selectedSales, selectedExpenses);
   const supplies = selectedMovements.filter((movement) => movement.type === 'supply').reduce((sum, movement) => sum + movement.amount, 0);
   const withdrawals = selectedMovements.filter((movement) => movement.type === 'withdrawal').reduce((sum, movement) => sum + movement.amount, 0);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h2 className="text-lg font-semibold">Resumo do caixa</h2><p className="text-sm text-muted-foreground">Vendas do período selecionado</p></div>
-        <PeriodSelector value={period} onChange={setPeriod} />
+        <div><h2 className="text-lg font-semibold">Resumo do caixa</h2><p className="text-sm text-muted-foreground">{PERIOD_LABELS[period]} · {periodDescription(period, referenceDate)}</p></div>
+        <PeriodSelector value={period} onChange={setPeriod} referenceDate={referenceDate} onReferenceDateChange={setReferenceDate} />
       </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric icon={DollarSign} label={`Vendas · ${PERIOD_LABELS[period]}`} value={money(summary.total)} />
@@ -356,6 +496,18 @@ function DashboardTab({ sales, movements }: { sales: CashSale[]; movements: Cash
         <Metric icon={TrendingUp} label="Ticket médio" value={money(summary.average)} />
         <Metric icon={Wallet} label="Suprimentos · sangrias" value={`${money(supplies)} · ${money(withdrawals)}`} />
       </div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Metric icon={TrendingUp} label="Lucro estimado" value={money(profit.estimatedProfit)} />
+        <Metric icon={DollarSign} label="Custo conhecido dos produtos" value={money(profit.knownProductCost)} />
+        <Metric icon={Wallet} label="Despesas registradas" value={money(profit.expenseTotal)} />
+        <Metric icon={BarChart3} label="Margem estimada" value={`${profit.marginPercent.toFixed(2)}%`} />
+      </div>
+      {profit.itemsWithoutCost > 0 && (
+        <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          Estimativa parcial: {profit.itemsWithoutCost} linha(s) de venda no período sem custo cadastrado. Cadastre os custos no Estoque ou no Cardápio para melhorar o resultado. O cálculo não inclui impostos, taxas de pagamento ou folha.
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">Lucro e margem são estimativas: incluem custos cadastrados e despesas lançadas, mas não incluem impostos, tarifas de pagamento ou folha.</p>
       <Card className="p-5"><div className="mb-4 flex items-center gap-2"><BarChart3 className="h-4 w-4 text-primary" /><h3 className="font-semibold">Faturamento por forma de pagamento</h3></div><PaymentBreakdown sales={selectedSales} /></Card>
       <Card className="space-y-4 p-5"><h3 className="font-semibold">Faturamento por origem</h3><SourceBreakdown sales={selectedSales} /></Card>
       {!selectedSales.length && <p className="py-5 text-center text-sm text-muted-foreground">Ainda não há vendas neste período.</p>}
@@ -364,13 +516,16 @@ function DashboardTab({ sales, movements }: { sales: CashSale[]; movements: Cash
 }
 
 function SalesTab({
-  establishmentId, modules, session, products, setProducts, menuItems, orders, setOrders, commands, setCommands, services, professionals, appointments, setAppointments, register, setRegister,
+  establishmentId, user, modules, session, products, setProducts, menuItems, orders, setOrders, commands, setCommands, services, professionals, appointments, setAppointments, register, setRegister,
+  setInventoryMovements,
 }: {
   establishmentId: string;
+  user: ReturnType<typeof useAuth>['user'];
   modules: Record<ModuleKey, boolean>;
   session: CashSession | null;
   products: Product[];
   setProducts: Dispatch<SetStateAction<Product[]>>;
+  setInventoryMovements: Dispatch<SetStateAction<InventoryMovement[]>>;
   menuItems: MenuItem[];
   orders: MenuOrder[];
   setOrders: Dispatch<SetStateAction<MenuOrder[]>>;
@@ -406,9 +561,9 @@ function SalesTab({
   const openCommands = commands.filter((command) => command.establishmentId === establishmentId && command.status === 'open');
   const selectedCommand = openCommands.find((command) => command.id === selectedCommandId);
   const catalog: SaleItem[] = origin === 'produto_estoque'
-    ? products.map((product) => ({ productId: product.id, name: product.name, price: product.price, quantity: 1 }))
+    ? products.map((product) => ({ productId: product.id, name: product.name, price: product.price, unitCost: product.unitCost, quantity: 1 }))
     : origin === 'cardapio'
-      ? menuItems.map((item) => ({ productId: `menu:${item.id}`, name: item.name, price: item.price, quantity: 1 }))
+      ? menuItems.map((item) => ({ productId: `menu:${item.id}`, name: item.name, price: item.price, unitCost: item.unitCost, quantity: 1 }))
       : origin === 'agendamento'
         ? [
             ...services.map((service) => ({ productId: `service:${service.id}`, name: service.name, price: service.price, quantity: 1 })),
@@ -484,6 +639,7 @@ function SalesTab({
     if (cart.some((item) => item.sourceRecordId === order.id)) { toast.error('Este pedido já está na venda atual'); return; }
     const orderItems = order.items.map((item, index) => ({
       ...item,
+      unitCost: item.unitCost ?? menuItems.find((menuItem) => menuItem.id === item.productId)?.unitCost,
       productId: `order:${order.id}:${index}:${item.productId}`,
       sourceRecordId: order.id,
     }));
@@ -522,9 +678,19 @@ function SalesTab({
 
   const confirmPayment = (splits: PaymentSplit[], change: number) => {
     if (!session) { toast.error('Abra o caixa antes de registrar vendas'); return; }
+    if (origin === 'produto_estoque' && cart.some((item) => {
+      const product = products.find((entry) => entry.id === item.productId);
+      return !product || product.stock < item.quantity;
+    })) {
+      toast.error('O estoque mudou. Revise as quantidades da venda');
+      setPaymentDialogOpen(false);
+      return;
+    }
     const sale: CashSale = {
       id: createId(), establishmentId, sessionId: session.id, createdAt: new Date().toISOString(),
-      items: origin === 'agendamento' ? cart.map((item) => ({ ...item, professional: selectedProfessional })) : cart,
+      items: origin === 'agendamento'
+        ? cart.map((item) => ({ ...item, professional: selectedProfessional }))
+        : cart.map((item) => ({ ...item })),
       total, subtotal, serviceCharge, origin,
       sourceRecordId: origin === 'comanda' ? selectedCommand?.id : cart.length === 1 ? cart[0].sourceRecordId : undefined,
       commandId: origin === 'comanda' ? selectedCommand?.id : undefined,
@@ -534,7 +700,27 @@ function SalesTab({
       amountReceived: total + change,
       change,
     };
-    setRegister((current) => ({ ...current, sales: [...current.sales, sale] }));
+    const auditEvent = createAuditEvent(user, {
+      entityType: 'sale',
+      entityId: sale.id,
+      action: 'created',
+      occurredAt: sale.createdAt,
+      summary: `Venda registrada: ${SOURCE_LABELS[sale.origin]} · ${money(sale.total)}.`,
+    });
+    const paidOrders = origin === 'cardapio'
+      ? orders.filter((order) => cart.some((item) => item.sourceRecordId === order.id))
+      : [];
+    const relatedEvents = paidOrders.map((order) => createAuditEvent(user, {
+      entityType: 'order',
+      entityId: order.id,
+      action: 'status_changed',
+      occurredAt: sale.createdAt,
+      summary: 'Pedido pago no caixa.',
+    }));
+    setRegister((current) => relatedEvents.reduce(
+      (updated, event) => appendAuditEvent(updated, event),
+      appendAuditEvent({ ...current, sales: [...current.sales, sale] }, auditEvent),
+    ));
     if (origin === 'cardapio') {
       const chargedOrders = new Set(cart.map((item) => item.sourceRecordId).filter((id): id is string => Boolean(id)));
       setOrders((current) => current.map((order) => chargedOrders.has(order.id) ? { ...order, status: 'paid' } : order));
@@ -553,11 +739,34 @@ function SalesTab({
         const sold = cart.find((item) => item.productId === product.id);
         return sold ? { ...product, stock: product.stock - sold.quantity } : product;
       }));
+      setInventoryMovements((current) => [
+        ...current,
+        ...sale.items.flatMap((item) => {
+          const product = products.find((entry) => entry.id === item.productId);
+          return product ? [{
+            id: createId(),
+            productId: product.id,
+            productName: product.name,
+            unit: product.unit,
+            type: 'sale' as const,
+            quantity: item.quantity,
+            createdAt: sale.createdAt,
+          }] : [];
+        }),
+      ]);
     }
     setCart([]); setSelectedCommandId(''); setIncludeServiceCharge(false);
     setPaymentMethod(splits[0].method);
     if (origin === 'agendamento') setSelectedProfessional('');
     toast.success(`Venda registrada${change ? ` · troco ${money(change)}` : ''}`);
+    if (origin === 'produto_estoque') {
+      const lowStockNames = cart.flatMap((item) => {
+        const product = products.find((entry) => entry.id === item.productId);
+        const minimumStock = product?.minimumStock ?? 24;
+        return product && product.stock - item.quantity <= minimumStock ? [product.name] : [];
+      });
+      if (lowStockNames.length) toast.warning(`Estoque baixo: ${lowStockNames.join(', ')}`);
+    }
   };
 
   return (
@@ -625,7 +834,9 @@ function SalesTab({
                       return (
                         <button type="button" key={item.productId} disabled={!session || (product != null && product.stock <= 0)} onClick={() => addItem(item)} className="flex min-h-28 flex-col items-start rounded-md border p-3 text-left transition-colors hover:border-primary/50 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50">
                           <span className="line-clamp-2 text-sm font-medium">{item.name}</span><span className="mt-auto pt-2 font-bold text-primary">{money(item.price)}</span>
-                          {product && <span className="text-xs text-muted-foreground">Estoque: {product.stock} {product.unit}</span>}
+                          {product && <span className={`text-xs ${product.stock <= (product.minimumStock ?? 24) ? 'font-medium text-amber-700' : 'text-muted-foreground'}`}>
+                            Estoque: {product.stock} {product.unit}{product.stock <= (product.minimumStock ?? 24) ? ' · estoque baixo' : ''}
+                          </span>}
                         </button>
                       );
                     })}
@@ -678,44 +889,159 @@ function SalesTab({
 }
 
 function MovementsTab({
-  establishmentId, session, register, setRegister,
+  establishmentId, session, register, setRegister, user,
 }: {
   establishmentId: string;
   session: CashSession | null;
   register: CashRegisterData;
   setRegister: Dispatch<SetStateAction<CashRegisterData>>;
+  user: ReturnType<typeof useAuth>['user'];
 }) {
-  const [type, setType] = useState<CashMovement['type']>('supply');
+  const [type, setType] = useState<CashMovement['type'] | 'expense'>('supply');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
+  const [category, setCategory] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('pix');
   const addMovement = () => {
     const value = Number(amount);
-    if (!session) { toast.error('Abra o caixa antes de registrar movimentações'); return; }
     if (!Number.isFinite(value) || value <= 0) { toast.error('Informe um valor maior que zero'); return; }
-    if (!note.trim()) { toast.error('Informe o motivo da movimentação'); return; }
+    if (!note.trim()) { toast.error(type === 'expense' ? 'Informe a descrição da despesa' : 'Informe o motivo da movimentação'); return; }
+    if (type === 'expense' && !category.trim()) { toast.error('Informe a categoria da despesa'); return; }
+    if (type !== 'expense' && !session) { toast.error('Abra o caixa antes de registrar movimentações'); return; }
+    if (type === 'expense' && paymentMethod === 'dinheiro' && !session) { toast.error('Abra o caixa para registrar uma despesa paga em dinheiro'); return; }
+    const createdAt = new Date().toISOString();
+    const roundedAmount = Math.round(value * 100) / 100;
+    if (type === 'expense') {
+      const expense: CashExpense = {
+        id: createId(),
+        establishmentId,
+        sessionId: paymentMethod === 'dinheiro' ? session?.id : undefined,
+        createdAt,
+        description: note.trim(),
+        category: category.trim(),
+        amount: roundedAmount,
+        paymentMethod,
+        recordedBy: user?.displayName || user?.username || 'Usuário desconhecido',
+      };
+      const event = createAuditEvent(user, {
+        entityType: 'expense',
+        entityId: expense.id,
+        action: 'created',
+        occurredAt: createdAt,
+        summary: `Despesa registrada: ${expense.description} · ${money(expense.amount)} · ${expense.category}.`,
+      });
+      setRegister((current) => appendAuditEvent({
+        ...current,
+        expenses: [...(current.expenses ?? []), expense],
+        movements: paymentMethod === 'dinheiro' && session ? [
+          ...current.movements,
+          {
+            id: createId(),
+            establishmentId,
+            sessionId: session.id,
+            createdAt,
+            type: 'withdrawal',
+            amount: roundedAmount,
+            note: `Despesa: ${expense.description}`,
+            expenseId: expense.id,
+          },
+        ] : current.movements,
+      }, event));
+      setAmount('');
+      setNote('');
+      setCategory('');
+      toast.success('Despesa registrada');
+      return;
+    }
+    if (!session) {
+      toast.error('Abra o caixa antes de registrar movimentações');
+      return;
+    }
     const movement: CashMovement = {
-      id: createId(), establishmentId, sessionId: session.id, createdAt: new Date().toISOString(),
-      type, amount: Math.round(value * 100) / 100, note: note.trim(),
+      id: createId(), establishmentId, sessionId: session.id, createdAt,
+      type, amount: roundedAmount, note: note.trim(),
     };
-    setRegister((current) => ({ ...current, movements: [...current.movements, movement] }));
+    const auditEvent = createAuditEvent(user, {
+      entityType: 'cash_movement',
+      entityId: movement.id,
+      action: 'created',
+      occurredAt: createdAt,
+      summary: `${type === 'supply' ? 'Suprimento' : 'Sangria'} de ${money(roundedAmount)} registrado: ${movement.note}.`,
+    });
+    setRegister((current) => appendAuditEvent({ ...current, movements: [...current.movements, movement] }, auditEvent));
     setAmount(''); setNote(''); toast.success(type === 'supply' ? 'Suprimento registrado' : 'Sangria registrada');
   };
+  const cancelExpense = (expense: CashExpense) => {
+    if (expense.cancelledAt) return;
+    if (!window.confirm(`Cancelar a despesa "${expense.description}" de ${money(expense.amount)}?`)) return;
+    const cancellationReason = window.prompt('Informe o motivo obrigatório do cancelamento:')?.trim();
+    if (!cancellationReason) {
+      toast.error('O motivo é obrigatório. O cancelamento foi interrompido.');
+      return;
+    }
+    const cancelledAt = new Date().toISOString();
+    const auditEvent = createAuditEvent(user, {
+      entityType: 'expense',
+      entityId: expense.id,
+      action: 'cancelled',
+      occurredAt: cancelledAt,
+      summary: `Despesa "${expense.description}" de ${money(expense.amount)} cancelada. Motivo: ${cancellationReason}`,
+    });
+    setRegister((current) => {
+      const movements = current.movements.map((movement) => movement.expenseId === expense.id
+        ? { ...movement, cancelledAt, cancellationReason }
+        : movement);
+      const updatedExpenses = (current.expenses ?? []).map((entry) => entry.id === expense.id
+        ? { ...entry, cancelledAt, cancellationReason }
+        : entry);
+      return appendAuditEvent({
+        ...current,
+        expenses: updatedExpenses,
+        movements,
+        sessions: current.sessions.map((cashSession) => {
+          if (cashSession.id !== expense.sessionId || !cashSession.closedAt) return cashSession;
+          const expected = calculateExpectedCash(cashSession, current.sales, movements);
+          return { ...cashSession, expectedCash: expected, difference: (cashSession.countedCash ?? 0) - expected };
+        }),
+      }, auditEvent);
+    });
+    toast.success('Despesa cancelada');
+  };
   const movements = [...register.movements].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const expenses = [...(register.expenses ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const paymentMethodOptions = PAYMENT_METHODS;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(260px,0.7fr)_1.3fr]">
       <Card className="space-y-4 p-5">
-        <div><h2 className="font-semibold">Nova movimentação</h2><p className="text-sm text-muted-foreground">Registre entradas e retiradas em dinheiro.</p></div>
-        {!session && <p className="rounded-md bg-amber-50 p-3 text-sm text-amber-900">Abra uma sessão para registrar movimentações.</p>}
-        <div className="grid grid-cols-2 gap-2">
-          <Button type="button" variant={type === 'supply' ? 'default' : 'outline'} onClick={() => setType('supply')}><ArrowDownCircle className="mr-2 h-4 w-4" />Suprimento</Button>
-          <Button type="button" variant={type === 'withdrawal' ? 'default' : 'outline'} onClick={() => setType('withdrawal')}><ArrowUpCircle className="mr-2 h-4 w-4" />Sangria</Button>
+        <div><h2 className="font-semibold">{type === 'expense' ? 'Nova despesa' : 'Nova movimentação'}</h2><p className="text-sm text-muted-foreground">Registre custos operacionais e movimentações do caixa.</p></div>
+        {type !== 'expense' && !session && <p className="rounded-md bg-amber-50 p-3 text-sm text-amber-900">Abra uma sessão para registrar movimentações.</p>}
+        <div className="grid grid-cols-3 gap-2">
+          <Button type="button" size="sm" variant={type === 'supply' ? 'default' : 'outline'} onClick={() => setType('supply')}><ArrowDownCircle className="mr-1 h-4 w-4" />Suprimento</Button>
+          <Button type="button" size="sm" variant={type === 'withdrawal' ? 'default' : 'outline'} onClick={() => setType('withdrawal')}><ArrowUpCircle className="mr-1 h-4 w-4" />Sangria</Button>
+          <Button type="button" size="sm" variant={type === 'expense' ? 'default' : 'outline'} onClick={() => setType('expense')}><DollarSign className="mr-1 h-4 w-4" />Despesa</Button>
         </div>
         <label className="block space-y-1 text-sm font-medium">Valor (R$)<Input type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0,00" /></label>
-        <label className="block space-y-1 text-sm font-medium">Motivo<Input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Ex.: reforço de troco" /></label>
-        <Button type="button" onClick={addMovement} disabled={!session}>Registrar movimentação</Button>
+        <label className="block space-y-1 text-sm font-medium">{type === 'expense' ? 'Descrição' : 'Motivo'}<Input value={note} onChange={(event) => setNote(event.target.value)} placeholder={type === 'expense' ? 'Ex.: conta de energia' : 'Ex.: reforço de troco'} /></label>
+        {type === 'expense' && <>
+          <label className="block space-y-1 text-sm font-medium">Categoria<Input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Ex.: aluguel, insumos, energia" /></label>
+          <label className="block space-y-1 text-sm font-medium">Forma de pagamento<select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">{paymentMethodOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+          <p className="text-xs text-muted-foreground">Despesas pagas em dinheiro também serão lançadas como saída no caixa.</p>
+        </>}
+        <Button type="button" onClick={addMovement} disabled={type !== 'expense' && !session}>Registrar {type === 'expense' ? 'despesa' : 'movimentação'}</Button>
       </Card>
-      <Card className="p-5"><h2 className="mb-3 font-semibold">Histórico de movimentações</h2><MovementList movements={movements} /></Card>
+      <div className="space-y-4">
+        <Card className="p-5"><h2 className="mb-3 font-semibold">Histórico de movimentações</h2><MovementList movements={movements} /></Card>
+        <Card className="p-5">
+          <h2 className="mb-3 font-semibold">Despesas</h2>
+          {expenses.length ? <div className="divide-y">{expenses.map((expense) => (
+            <div key={expense.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+              <div><p className="font-medium">{expense.description}</p><p className="text-xs text-muted-foreground">{expense.category} · {PAYMENT_METHODS.find((option) => option.value === expense.paymentMethod)?.label} · {new Date(expense.createdAt).toLocaleString('pt-BR')} · {expense.recordedBy}</p>{expense.cancelledAt && <p className="text-xs text-destructive">Cancelada · Motivo: {expense.cancellationReason}</p>}</div>
+              <div className="flex items-center gap-2"><span className="font-semibold">{money(expense.amount)}</span>{!expense.cancelledAt && <Button type="button" size="sm" variant="outline" onClick={() => cancelExpense(expense)}>Cancelar</Button>}</div>
+            </div>
+          ))}</div> : <p className="py-6 text-center text-sm text-muted-foreground">Nenhuma despesa registrada.</p>}
+        </Card>
+      </div>
     </div>
   );
 }
@@ -723,31 +1049,171 @@ function MovementsTab({
 function MovementList({ movements }: { movements: CashMovement[] }) {
   if (!movements.length) return <p className="py-8 text-center text-sm text-muted-foreground">Nenhuma movimentação registrada.</p>;
   return <div className="divide-y">{movements.map((movement) => (
-    <div key={movement.id} className="flex items-center gap-3 py-3">
+    <div key={movement.id} className={`flex items-center gap-3 py-3 ${movement.cancelledAt ? 'opacity-60' : ''}`}>
       {movement.type === 'supply' ? <ArrowDownCircle className="h-4 w-4 shrink-0 text-emerald-600" /> : <ArrowUpCircle className="h-4 w-4 shrink-0 text-amber-600" />}
-      <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{movement.note}</p><p className="text-xs text-muted-foreground">{new Date(movement.createdAt).toLocaleString('pt-BR')}</p></div>
-      <span className={`text-sm font-semibold ${movement.type === 'supply' ? 'text-emerald-700' : 'text-amber-700'}`}>{movement.type === 'supply' ? '+' : '−'}{money(movement.amount)}</span>
+    <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{movement.note}</p><p className="text-xs text-muted-foreground">{new Date(movement.createdAt).toLocaleString('pt-BR')}</p>{movement.cancelledAt && <p className="text-xs text-destructive">Cancelada · Motivo: {movement.cancellationReason}</p>}</div>
+    <span className={`text-sm font-semibold ${movement.cancelledAt ? 'text-muted-foreground' : movement.type === 'supply' ? 'text-emerald-700' : 'text-amber-700'}`}>{movement.type === 'supply' ? '+' : '−'}{money(movement.amount)}</span>
     </div>
   ))}</div>;
 }
 
-function ReportsTab({ sales, movements, canManageSales, onCancelSale, onDeleteSale }: {
+function ReportsTab({ establishmentName, sales, movements, expenses, auditEvents, orders, drivers, canManageSales, onCancelSale, onDeleteSale }: {
+  establishmentName: string;
   sales: CashSale[];
   movements: CashMovement[];
+  expenses: CashExpense[];
+  auditEvents: NonNullable<CashRegisterData['auditEvents']>;
+  orders: MenuOrder[];
+  drivers: DeliveryDriver[];
   canManageSales: boolean;
   onCancelSale: (sale: CashSale) => void;
   onDeleteSale: (sale: CashSale) => void;
 }) {
   const [period, setPeriod] = useState<Period>('day');
-  const periodSales = sales.filter((sale) => isInPeriod(sale.createdAt, period)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const periodMovements = movements.filter((movement) => isInPeriod(movement.createdAt, period));
+  const [referenceDate, setReferenceDate] = useState(() => dateKey(new Date()));
+  const [chartType, setChartType] = useState<ChartType>('bar');
+  const [exporting, setExporting] = useState<'excel' | 'backup' | null>(null);
+  const periodSales = sales.filter((sale) => isDateInReportPeriod(sale.createdAt, period, referenceDate)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const periodMovements = movements.filter((movement) => !movement.cancelledAt && isDateInReportPeriod(movement.createdAt, period, referenceDate));
+  const periodExpenses = expenses.filter((expense) => isDateInReportPeriod(expense.createdAt, period, referenceDate));
+  const periodAuditEvents = auditEvents.filter((event) => isDateInReportPeriod(event.occurredAt, period, referenceDate));
   const summary = summarize(periodSales);
+  const profit = calculateProfitSummary(periodSales, periodExpenses);
+  const chartData = reportChartData(period, referenceDate, periodSales, periodExpenses);
+  const pieData = [
+    { name: 'Vendas', value: summary.total, color: '#3f7c78' },
+    { name: 'Despesas', value: profit.expenseTotal, color: '#bc7a69' },
+  ].filter((entry) => entry.value > 0);
+  const ordersById = new Map(orders.map((order) => [order.id, order]));
+  const driversById = new Map(drivers.map((driver) => [driver.id, driver]));
+  const deliverySummary = new Map<string, { id: string; name: string; deliveries: number; total: number }>();
+  for (const sale of periodSales) {
+    if (sale.origin !== 'delivery' || sale.status === 'cancelled') continue;
+    const orderId = sale.sourceRecordId ?? sale.items.find((item) => item.sourceRecordId)?.sourceRecordId;
+    const order = orderId ? ordersById.get(orderId) : undefined;
+    if (order?.orderType === 'pickup') continue;
+    const driverId = order?.driverId ?? 'unassigned';
+    const driverName = order?.driverId
+      ? driversById.get(order.driverId)?.name ?? 'Entregador removido'
+      : 'Sem entregador';
+    const driverSummary = deliverySummary.get(driverId) ?? { id: driverId, name: driverName, deliveries: 0, total: 0 };
+    driverSummary.deliveries += 1;
+    driverSummary.total += sale.total;
+    deliverySummary.set(driverId, driverSummary);
+  }
+  const deliveryRows = [...deliverySummary.values()].sort((first, second) => second.total - first.total);
+  const getExportData = () => ({
+    establishmentName,
+    periodLabel: PERIOD_LABELS[period],
+    periodDescription: periodDescription(period, referenceDate),
+    sales: periodSales,
+    expenses: periodExpenses,
+    movements: movements.filter((movement) => isDateInReportPeriod(movement.createdAt, period, referenceDate)),
+    auditEvents: periodAuditEvents,
+    deliveryRows,
+    profit,
+  });
+  const exportReport = async (format: 'excel' | 'backup') => {
+    setExporting(format);
+    try {
+      const exporter = await import('@/lib/reportExport');
+      if (format === 'excel') {
+        await exporter.downloadFinancialReport(getExportData());
+        toast.success('Relatório Excel exportado');
+      } else {
+        exporter.downloadFinancialReportBackup(getExportData());
+        toast.success('Backup do relatório exportado');
+      }
+    } catch (reason) {
+      toast.error(reason instanceof Error ? `Não foi possível exportar o relatório: ${reason.message}` : 'Não foi possível exportar o relatório Excel.');
+    } finally {
+      setExporting(null);
+    }
+  };
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Relatório de caixa</h2><p className="text-sm text-muted-foreground">Consolidado de vendas e pagamentos</p></div><PeriodSelector value={period} onChange={setPeriod} /></div>
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Relatório de caixa</h2><p className="text-sm text-muted-foreground">{PERIOD_LABELS[period]} · {periodDescription(period, referenceDate)}</p></div><div className="flex flex-wrap items-center gap-3"><PeriodSelector value={period} onChange={setPeriod} referenceDate={referenceDate} onReferenceDateChange={setReferenceDate} /><Button type="button" variant="outline" onClick={() => void exportReport('backup')} disabled={exporting !== null}><Download className="mr-2 h-4 w-4" />{exporting === 'backup' ? 'Exportando...' : 'Backup JSON'}</Button><Button type="button" variant="outline" onClick={() => void exportReport('excel')} disabled={exporting !== null}><Download className="mr-2 h-4 w-4" />{exporting === 'excel' ? 'Exportando...' : 'Exportar Excel'}</Button></div></div>
       <div className="grid gap-3 sm:grid-cols-3"><Metric icon={DollarSign} label="Faturamento" value={money(summary.total)} /><Metric icon={Receipt} label="Número de vendas" value={String(summary.count)} /><Metric icon={Wallet} label="Movimentações" value={String(periodMovements.length)} /></div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Metric icon={TrendingUp} label="Lucro estimado" value={money(profit.estimatedProfit)} />
+        <Metric icon={DollarSign} label="Custo conhecido dos produtos" value={money(profit.knownProductCost)} />
+        <Metric icon={Wallet} label="Despesas" value={money(profit.expenseTotal)} />
+        <Metric icon={BarChart3} label="Margem estimada" value={`${profit.marginPercent.toFixed(2)}%`} />
+      </div>
+      {profit.itemsWithoutCost > 0 && (
+        <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          Estimativa parcial: {profit.itemsWithoutCost} linha(s) de venda sem custo cadastrado. O cálculo não inclui impostos, taxas de pagamento ou folha.
+        </p>
+      )}
+        <p className="text-xs text-muted-foreground">Lucro e margem são estimativas: incluem custos cadastrados e despesas lançadas, mas não incluem impostos, tarifas de pagamento ou folha.</p>
+      <Card className="p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h3 className="font-semibold">Vendas e despesas no período</h3>
+          <ChartTypeSelector value={chartType} onChange={setChartType} label="vendas e despesas" />
+        </div>
+        <div className="mb-4">
+          <p className="text-sm text-muted-foreground">
+            {period === 'day' ? 'Comparação por hora' : period === 'year' ? 'Comparação por mês' : 'Comparação por dia'} · cancelamentos e despesas canceladas não são considerados
+          </p>
+        </div>
+        {summary.total > 0 || profit.expenseTotal > 0 ? (
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              {chartType === 'pie' ? (
+                <PieChart>
+                  <Tooltip formatter={(value) => money(Number(value))} />
+                  <Legend />
+                  <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius="75%">
+                    {pieData.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
+                  </Pie>
+                </PieChart>
+              ) : chartType === 'line' ? (
+                <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="label" tickLine={false} axisLine={false} />
+                  <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                  <Tooltip formatter={(value) => money(Number(value))} />
+                  <Legend />
+                  <Line type="monotone" dataKey="sales" name="Vendas" stroke="#3f7c78" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="expenses" name="Despesas" stroke="#bc7a69" strokeWidth={2} dot={false} />
+                </LineChart>
+              ) : (
+                <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="label" tickLine={false} axisLine={false} />
+                  <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                  <Tooltip formatter={(value) => money(Number(value))} />
+                  <Legend />
+                  <Bar dataKey="sales" name="Vendas" fill="#3f7c78" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="expenses" name="Despesas" fill="#bc7a69" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              )}
+            </ResponsiveContainer>
+          </div>
+        ) : <p className="py-8 text-center text-sm text-muted-foreground">Ainda não há vendas ou despesas neste período.</p>}
+      </Card>
+      <Card className="p-5">
+        <h3 className="mb-3 font-semibold">Despesas do período</h3>
+        {periodExpenses.length ? <div className="divide-y">{periodExpenses.map((expense) => (
+          <div key={expense.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+            <div><p className="font-medium">{expense.description}</p><p className="text-xs text-muted-foreground">{expense.category} · {new Date(expense.createdAt).toLocaleString('pt-BR')} · {expense.recordedBy}</p>{expense.cancelledAt && <p className="text-xs text-destructive">Cancelada · Motivo: {expense.cancellationReason}</p>}</div>
+            <p className={`font-semibold ${expense.cancelledAt ? 'text-muted-foreground line-through' : ''}`}>{money(expense.amount)}</p>
+          </div>
+        ))}</div> : <p className="py-4 text-center text-sm text-muted-foreground">Nenhuma despesa neste período.</p>}
+      </Card>
       <Card className="p-5"><h3 className="mb-4 font-semibold">Por forma de pagamento</h3><PaymentBreakdown sales={periodSales} /></Card>
       <Card className="space-y-4 p-5"><h3 className="font-semibold">Por origem</h3><SourceBreakdown sales={periodSales} /></Card>
+      <Card className="p-5">
+        <h3 className="mb-3 font-semibold">Delivery por entregador</h3>
+        {deliveryRows.length ? <div className="divide-y">
+          {deliveryRows.map((driver) => (
+            <div key={driver.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+              <div><p className="font-medium">{driver.name}</p><p className="text-xs text-muted-foreground">{driver.deliveries} {driver.deliveries === 1 ? 'entrega' : 'entregas'} · faturamento</p></div>
+              <p className="font-semibold">{money(driver.total)}</p>
+            </div>
+          ))}
+        </div> : <p className="py-4 text-center text-sm text-muted-foreground">Nenhuma entrega paga neste período.</p>}
+      </Card>
       <Card className="p-5">
         <h3 className="mb-3 font-semibold">Vendas do período</h3>
         {periodSales.length ? <div className="divide-y">{periodSales.map((sale) => (
@@ -757,6 +1223,7 @@ function ReportsTab({ sales, movements, canManageSales, onCancelSale, onDeleteSa
               {sale.origin === 'agendamento' && sale.items.map((item) => item.professional && <p key={`${sale.id}-${item.productId}`} className="text-xs text-muted-foreground">{item.name}: {item.professional}</p>)}
               {sale.serviceCharge ? <p className="text-xs text-muted-foreground">10% do garçom: {money(sale.serviceCharge)}</p> : null}
               <p className="text-xs text-muted-foreground">{new Date(sale.createdAt).toLocaleString('pt-BR')}</p>
+              {sale.cancellationReason && <p className="text-xs text-destructive">Motivo do estorno: {sale.cancellationReason}</p>}
             </div>
             <div className="flex items-center gap-3">
               <div className="text-right"><p className="font-semibold">{money(sale.total)}</p><p className="text-xs text-muted-foreground">{paymentLabel(sale)}</p></div>
@@ -773,31 +1240,30 @@ function ReportsTab({ sales, movements, canManageSales, onCancelSale, onDeleteSa
   );
 }
 
-function expectedCash(session: CashSession, sales: CashSale[], movements: CashMovement[]) {
-  const cashSales = sales.filter((sale) => sale.status !== 'cancelled' && sale.sessionId === session.id)
-    .reduce((sum, sale) => sum + paymentAmount(sale, 'dinheiro'), 0);
-  const sessionMovements = movements.filter((movement) => movement.sessionId === session.id);
-  const supplies = sessionMovements.filter((movement) => movement.type === 'supply').reduce((sum, movement) => sum + movement.amount, 0);
-  const withdrawals = sessionMovements.filter((movement) => movement.type === 'withdrawal').reduce((sum, movement) => sum + movement.amount, 0);
-  return Math.round((session.openingAmount + cashSales + supplies - withdrawals) * 100) / 100;
-}
-
 function CashSessionTab({
-  establishmentId, register, setRegister, activeSession,
+  establishmentId, register, setRegister, activeSession, user,
 }: {
   establishmentId: string;
   register: CashRegisterData;
   setRegister: Dispatch<SetStateAction<CashRegisterData>>;
   activeSession: CashSession | null;
+  user: ReturnType<typeof useAuth>['user'];
 }) {
   const [openingAmount, setOpeningAmount] = useState('');
   const [countedAmount, setCountedAmount] = useState('');
-  const expected = activeSession ? expectedCash(activeSession, register.sales, register.movements) : 0;
+  const expected = activeSession ? calculateExpectedCash(activeSession, register.sales, register.movements) : 0;
   const open = () => {
     const value = Number(openingAmount) || 0;
     if (value < 0) { toast.error('O saldo inicial não pode ser negativo'); return; }
     const session: CashSession = { id: createId(), establishmentId, openedAt: new Date().toISOString(), openingAmount: Math.round(value * 100) / 100 };
-    setRegister((current) => ({ ...current, activeSessionId: session.id, sessions: [...current.sessions, session] }));
+    const event = createAuditEvent(user, {
+      entityType: 'cash_session',
+      entityId: session.id,
+      action: 'opened',
+      occurredAt: session.openedAt,
+      summary: `Caixa aberto com saldo inicial de ${money(session.openingAmount)}.`,
+    });
+    setRegister((current) => appendAuditEvent({ ...current, activeSessionId: session.id, sessions: [...current.sessions, session] }, event));
     setOpeningAmount(''); toast.success('Caixa aberto');
   };
   const close = () => {
@@ -805,13 +1271,21 @@ function CashSessionTab({
     if (countedAmount === '' || !Number.isFinite(Number(countedAmount))) { toast.error('Informe o valor contado no caixa'); return; }
     const counted = Math.round(Number(countedAmount) * 100) / 100;
     if (counted < 0) { toast.error('O valor contado não pode ser negativo'); return; }
-    setRegister((current) => ({
+    const closedAt = new Date().toISOString();
+    const event = createAuditEvent(user, {
+      entityType: 'cash_session',
+      entityId: activeSession.id,
+      action: 'closed',
+      occurredAt: closedAt,
+      summary: `Caixa fechado. Esperado: ${money(expected)}; contado: ${money(counted)}; diferença: ${money(counted - expected)}.`,
+    });
+    setRegister((current) => appendAuditEvent({
       ...current,
       activeSessionId: null,
       sessions: current.sessions.map((session) => session.id === activeSession.id
-        ? { ...session, closedAt: new Date().toISOString(), expectedCash: expected, countedCash: counted, difference: Math.round((counted - expected) * 100) / 100 }
+        ? closeCashSession(session, current.sales, current.movements, counted, closedAt)
         : session),
-    }));
+    }, event));
     setCountedAmount(''); toast.success('Caixa fechado e fechamento registrado');
   };
   const closedSessions = [...register.sessions].filter((session) => session.closedAt).reverse();

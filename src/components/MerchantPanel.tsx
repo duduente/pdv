@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   CalendarClock, UtensilsCrossed, Calculator, Package,
   Settings, Home, ExternalLink, Copy, Check,
-  Scissors, Boxes, Receipt, Upload, ClipboardList, Bike,
+  Scissors, Boxes, Receipt, Upload, ClipboardList, Bike, WalletCards,
 } from 'lucide-react';
 import { useApp } from '@/store';
 import { useAuth } from '@/auth/AuthContext';
@@ -11,7 +11,9 @@ import { supabase } from '@/lib/supabase';
 import { appointments as initialAppointments, MODULE_LABELS, formatCurrency, products as initialProducts } from '@/mockData';
 import { usePersistentState } from '@/hooks/usePersistentState';
 import type { Appointment, CashRegisterData, ModuleKey, Product } from '@/types';
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import {
+  Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from 'recharts';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -27,6 +29,10 @@ import { DeliveryModule, DeliveryStoreSettings } from './modules/DeliveryModule'
 import { StoreUserManagement } from './StoreUserManagement';
 import { hasStorePermission } from '@/auth/permissions';
 import type { AppPermission } from '@/types';
+import { SupportChat } from '@/components/SupportChat';
+import { FinanceModule } from '@/components/modules/FinanceModule';
+import { ChartTypeSelector } from '@/components/ChartTypeSelector';
+import type { ChartType } from '@/components/ChartTypeSelector';
 
 const MODULE_ICONS: Record<ModuleKey, typeof CalendarClock> = {
   agendamento: CalendarClock,
@@ -44,7 +50,15 @@ const EMPTY_CASH_REGISTER: CashRegisterData = {
   movements: [],
 };
 
-type MerchantView = 'dashboard' | 'settings' | ModuleKey;
+type MerchantView = 'dashboard' | 'settings' | 'finance' | ModuleKey;
+type DashboardPeriod = 'day' | 'week' | 'month' | 'year';
+
+const DASHBOARD_PERIOD_LABELS: Record<DashboardPeriod, string> = {
+  day: 'Diário',
+  week: 'Semanal',
+  month: 'Mensal',
+  year: 'Anual',
+};
 
 export function MerchantPanel() {
   const { selectedEstablishment, viewPublicPage, updateEstablishment } = useApp();
@@ -66,6 +80,13 @@ export function MerchantPanel() {
     );
   const [view, setView] = useState<MerchantView>('dashboard');
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const [dashboardPeriod, setDashboardPeriod] = useState<DashboardPeriod>('week');
+  const [dashboardReferenceDate, setDashboardReferenceDate] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  });
+  const [activityChartType, setActivityChartType] = useState<ChartType>('bar');
+  const [professionalChartType, setProfessionalChartType] = useState<ChartType>('bar');
 
   useEffect(() => {
     if (!selectedEstablishment) return;
@@ -79,9 +100,11 @@ export function MerchantPanel() {
     const settingsAllowed = hasStorePermission(user, establishment.id, 'store-settings')
       || hasStorePermission(user, establishment.id, 'manage-users')
       || (establishment.modules.delivery && hasStorePermission(user, establishment.id, 'delivery'));
+    const financeAllowed = hasStorePermission(user, establishment.id, 'finance');
     const allowedViews: MerchantView[] = [
       ...(hasStorePermission(user, establishment.id, 'dashboard') ? ['dashboard' as const] : []),
       ...(settingsAllowed ? ['settings' as const] : []),
+      ...(financeAllowed ? ['finance' as const] : []),
       ...modules,
     ];
     setView((current) => allowedViews.includes(current) ? current : allowedViews[0] ?? 'dashboard');
@@ -98,6 +121,7 @@ export function MerchantPanel() {
   const canViewSettings = hasStorePermission(user, est.id, 'store-settings')
     || hasStorePermission(user, est.id, 'manage-users')
     || (est.modules.delivery && hasStorePermission(user, est.id, 'delivery'));
+  const canViewFinance = hasStorePermission(user, est.id, 'finance');
   const canViewCashReports = hasStorePermission(user, est.id, 'pdv-reports');
   const canViewCash = canAccessModule('pdv');
   const todayStart = new Date();
@@ -109,28 +133,57 @@ export function MerchantPanel() {
     .reduce((total, sale) => total + sale.total, 0);
   const todayAppointments = appointments.filter((appointment) => appointment.date === todayKey && appointment.status !== 'cancelled').length;
   const stockCount = products.reduce((total, product) => total + product.stock, 0);
-  const weekStart = new Date(todayStart);
-  weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
-  const weeklyChartData = Array.from({ length: 7 }, (_, index) => {
-    const day = new Date(weekStart);
-    day.setDate(weekStart.getDate() + index);
-    const key = dateKey(day);
-    const sales = cashRegister.sales
-      .filter((sale) => sale.status !== 'cancelled' && dateKey(new Date(sale.createdAt)) === key)
-      .reduce((total, sale) => total + sale.total, 0);
-    const movements = cashRegister.movements.filter((movement) => dateKey(new Date(movement.createdAt)) === key);
+  const chartRangeStart = new Date(`${dashboardReferenceDate}T00:00:00`);
+  if (dashboardPeriod === 'week') chartRangeStart.setDate(chartRangeStart.getDate() - ((chartRangeStart.getDay() + 6) % 7));
+  if (dashboardPeriod === 'month') chartRangeStart.setDate(1);
+  if (dashboardPeriod === 'year') chartRangeStart.setMonth(0, 1);
+  const chartRangeEnd = new Date(chartRangeStart);
+  if (dashboardPeriod === 'day') chartRangeEnd.setDate(chartRangeEnd.getDate() + 1);
+  if (dashboardPeriod === 'week') chartRangeEnd.setDate(chartRangeEnd.getDate() + 7);
+  if (dashboardPeriod === 'month') chartRangeEnd.setMonth(chartRangeEnd.getMonth() + 1);
+  if (dashboardPeriod === 'year') chartRangeEnd.setFullYear(chartRangeEnd.getFullYear() + 1);
+  const chartBuckets: { start: Date; end: Date; label: string }[] = [];
+  for (let bucketStart = new Date(chartRangeStart); bucketStart < chartRangeEnd;) {
+    const bucketEnd = new Date(bucketStart);
+    if (dashboardPeriod === 'day') bucketEnd.setHours(bucketEnd.getHours() + 1);
+    else if (dashboardPeriod === 'year') bucketEnd.setMonth(bucketEnd.getMonth() + 1);
+    else bucketEnd.setDate(bucketEnd.getDate() + 1);
+    const label = dashboardPeriod === 'day'
+      ? bucketStart.toLocaleTimeString('pt-BR', { hour: '2-digit' })
+      : dashboardPeriod === 'year'
+        ? bucketStart.toLocaleDateString('pt-BR', { month: 'short' })
+        : dashboardPeriod === 'week'
+          ? bucketStart.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit' })
+          : bucketStart.toLocaleDateString('pt-BR', { day: '2-digit' });
+    chartBuckets.push({ start: bucketStart, end: bucketEnd, label });
+    bucketStart = bucketEnd;
+  }
+  const chartData = chartBuckets.map(({ start, end, label }) => {
+    const sales = cashRegister.sales.filter((sale) => {
+      const createdAt = new Date(sale.createdAt).getTime();
+      return sale.status !== 'cancelled' && createdAt >= start.getTime() && createdAt < end.getTime();
+    });
+    const movements = cashRegister.movements.filter((movement) => {
+      const createdAt = new Date(movement.createdAt).getTime();
+      return createdAt >= start.getTime() && createdAt < end.getTime();
+    });
     return {
-      day: day.toLocaleDateString('pt-BR', { weekday: 'short' }),
-      vendas: sales,
+      period: label,
+      vendas: sales.reduce((total, sale) => total + sale.total, 0),
       sangrias: movements.filter((movement) => movement.type === 'withdrawal').reduce((total, movement) => total + movement.amount, 0),
       suprimentos: movements.filter((movement) => movement.type === 'supply').reduce((total, movement) => total + movement.amount, 0),
     };
   });
-  const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
+  const activityPieData = [
+    { name: 'Vendas', value: chartData.reduce((total, bucket) => total + bucket.vendas, 0), color: '#3f7c78' },
+    { name: 'Sangrias', value: chartData.reduce((total, bucket) => total + bucket.sangrias, 0), color: '#bc7a69' },
+    { name: 'Suprimentos', value: chartData.reduce((total, bucket) => total + bucket.suprimentos, 0), color: '#86a58d' },
+  ].filter((entry) => entry.value > 0);
   const appointmentsById = new Map(appointments.map((appointment) => [appointment.id, appointment]));
   const professionalSales = new Map<string, { appointments: number; revenue: number }>();
   for (const sale of cashRegister.sales) {
-    if (sale.origin !== 'agendamento' || sale.status === 'cancelled' || new Date(sale.createdAt) < monthStart) continue;
+    const createdAt = new Date(sale.createdAt).getTime();
+    if (sale.origin !== 'agendamento' || sale.status === 'cancelled' || createdAt < chartRangeStart.getTime() || createdAt >= chartRangeEnd.getTime()) continue;
     for (const item of sale.items) {
       const appointment = item.sourceRecordId ? appointmentsById.get(item.sourceRecordId) : undefined;
       const professional = item.professional || appointment?.professional;
@@ -184,6 +237,12 @@ export function MerchantPanel() {
             active={view === 'settings'}
             onClick={() => setView('settings')}
           />}
+          {canViewFinance && <SidebarItem
+            icon={WalletCards}
+            label="Finanças"
+            active={view === 'finance'}
+            onClick={() => setView('finance')}
+          />}
           <div className="my-2 h-px bg-border" />
           <p className="mb-1 hidden px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground md:block">
             Módulos Ativos
@@ -236,17 +295,19 @@ export function MerchantPanel() {
         <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8 animate-fade-in">
           {view === 'dashboard' && canViewDashboard && <DashboardView />}
           {view === 'settings' && canViewSettings && <SettingsView />}
+          {view === 'finance' && canViewFinance && <FinanceModule key={est.id} />}
           {view === 'agendamento' && canAccessModule('agendamento') && <AppointmentModule key={est.id} />}
           {view === 'cardapio' && canAccessModule('cardapio') && <MenuModule key={est.id} />}
           {view === 'pdv' && canViewCash && <CashRegisterModule key={est.id} />}
           {view === 'estoque' && canAccessModule('estoque') && <InventoryModule key={est.id} />}
           {view === 'comandas' && canAccessModule('comandas') && <CommandsModule key={est.id} />}
           {view === 'delivery' && canAccessModule('delivery') && <DeliveryModule key={est.id} />}
-          {!canViewDashboard && !canViewSettings && activeModules.length === 0 && (
+          {!canViewDashboard && !canViewSettings && !canViewFinance && activeModules.length === 0 && (
             <Card className="p-6 text-sm text-muted-foreground">Esta conta não tem permissões ativas nesta loja. Solicite acesso ao responsável.</Card>
           )}
         </div>
       </main>
+      <SupportChat establishmentId={est.id} establishmentName={est.name} />
     </div>
   );
 
@@ -267,19 +328,49 @@ export function MerchantPanel() {
 
         {est.modules.pdv && canViewCashReports && (
           <Card className="p-6">
-            <div className="mb-4"><h2 className="font-semibold">Atividade do caixa</h2><p className="text-sm text-muted-foreground">Vendas, sangrias e suprimentos nesta semana</p></div>
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+              <div><h2 className="font-semibold">Atividade do caixa</h2><p className="text-sm text-muted-foreground">{DASHBOARD_PERIOD_LABELS[dashboardPeriod]} · {chartRangeStart.toLocaleDateString('pt-BR')} a {new Date(chartRangeEnd.getTime() - 1).toLocaleDateString('pt-BR')}</p></div>
+              <div className="flex flex-wrap items-end gap-3">
+                <ChartTypeSelector value={activityChartType} onChange={setActivityChartType} label="atividade do caixa" />
+                <label className="space-y-1 text-xs font-medium text-muted-foreground">Data de referência<Input type="date" value={dashboardReferenceDate} onChange={(event) => { if (event.target.value) setDashboardReferenceDate(event.target.value); }} /></label>
+                <div className="inline-flex flex-wrap rounded-md border p-1" role="group" aria-label="Período dos gráficos do dashboard">
+                  {(['day', 'week', 'month', 'year'] as const).map((period) => <Button key={period} type="button" size="sm" variant={dashboardPeriod === period ? 'default' : 'ghost'} onClick={() => setDashboardPeriod(period)}>{DASHBOARD_PERIOD_LABELS[period]}</Button>)}
+                </div>
+              </div>
+            </div>
             <div className="h-72 w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={weeklyChartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="day" tickLine={false} axisLine={false} />
-                  <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
-                  <Tooltip formatter={(value) => formatCurrency(Number(value))} />
-                  <Legend />
-                  <Bar dataKey="vendas" name="Vendas" fill="#3f7c78" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="sangrias" name="Sangrias" fill="#bc7a69" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="suprimentos" name="Suprimentos" fill="#86a58d" radius={[6, 6, 0, 0]} />
-                </BarChart>
+                {activityChartType === 'pie' ? (
+                  <PieChart>
+                    <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+                    <Legend />
+                    <Pie data={activityPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius="75%">
+                      {activityPieData.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
+                    </Pie>
+                  </PieChart>
+                ) : activityChartType === 'line' ? (
+                  <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="period" tickLine={false} axisLine={false} />
+                    <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                    <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+                    <Legend />
+                    <Line type="monotone" dataKey="vendas" name="Vendas" stroke="#3f7c78" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="sangrias" name="Sangrias" stroke="#bc7a69" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="suprimentos" name="Suprimentos" stroke="#86a58d" strokeWidth={2} dot={false} />
+                  </LineChart>
+                ) : (
+                  <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="period" tickLine={false} axisLine={false} />
+                    <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                    <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+                    <Legend />
+                    <Bar dataKey="vendas" name="Vendas" fill="#3f7c78" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="sangrias" name="Sangrias" fill="#bc7a69" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="suprimentos" name="Suprimentos" fill="#86a58d" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                )}
               </ResponsiveContainer>
             </div>
           </Card>
@@ -287,20 +378,38 @@ export function MerchantPanel() {
 
         {est.modules.agendamento && canViewCashReports && canAccessModule('agendamento') && (
           <Card className="p-6">
-            <div className="mb-4"><h2 className="font-semibold">Faturamento por profissional</h2><p className="text-sm text-muted-foreground">Serviços registrados no caixa neste mês</p></div>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Faturamento por profissional</h2><p className="text-sm text-muted-foreground">Serviços registrados no caixa · {DASHBOARD_PERIOD_LABELS[dashboardPeriod].toLowerCase()} ({chartRangeStart.toLocaleDateString('pt-BR')} a {new Date(chartRangeEnd.getTime() - 1).toLocaleDateString('pt-BR')})</p></div><ChartTypeSelector value={professionalChartType} onChange={setProfessionalChartType} label="faturamento por profissional" /></div>
             {professionalChartData.length ? (
               <div className="h-64 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={professionalChartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="professional" tickLine={false} axisLine={false} />
-                    <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
-                    <Tooltip formatter={(value) => formatCurrency(Number(value))} />
-                    <Bar dataKey="revenue" name="Faturamento" fill="#3f7c78" radius={[6, 6, 0, 0]} />
-                  </BarChart>
+                  {professionalChartType === 'pie' ? (
+                    <PieChart>
+                      <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+                      <Legend />
+                      <Pie data={professionalChartData} dataKey="revenue" nameKey="professional" cx="50%" cy="50%" outerRadius="75%">
+                        {professionalChartData.map((entry, index) => <Cell key={entry.professional} fill={['#3f7c78', '#bc7a69', '#86a58d', '#7487a6', '#d2a84a'][index % 5]} />)}
+                      </Pie>
+                    </PieChart>
+                  ) : professionalChartType === 'line' ? (
+                    <LineChart data={professionalChartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="professional" tickLine={false} axisLine={false} />
+                      <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                      <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+                      <Line type="monotone" dataKey="revenue" name="Faturamento" stroke="#3f7c78" strokeWidth={2} />
+                    </LineChart>
+                  ) : (
+                    <BarChart data={professionalChartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="professional" tickLine={false} axisLine={false} />
+                      <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                      <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+                      <Bar dataKey="revenue" name="Faturamento" fill="#3f7c78" radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                  )}
                 </ResponsiveContainer>
               </div>
-            ) : <p className="py-8 text-center text-sm text-muted-foreground">Ainda não há serviços registrados por profissional neste mês.</p>}
+            ) : <p className="py-8 text-center text-sm text-muted-foreground">Ainda não há serviços registrados por profissional neste período.</p>}
           </Card>
         )}
 
@@ -332,31 +441,56 @@ export function MerchantPanel() {
         </div>
 
         {((est.modules.agendamento && canAccessModule('agendamento')) || (est.modules.cardapio && canAccessModule('cardapio'))) && (
-          <Card className="p-6">
-            <h3 className="font-semibold mb-3">Links Públicos</h3>
-            <div className="space-y-2">
+          <Card className="space-y-4 p-6">
+            <div>
+              <h3 className="font-semibold">Links Públicos</h3>
+              <p className="mt-1 text-sm text-muted-foreground">Pré-visualize as páginas ou copie o endereço para compartilhar com seus clientes.</p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
               {est.modules.agendamento && canAccessModule('agendamento') && (
-                <div className="flex items-center gap-2 rounded-lg border p-3">
-                  <CalendarClock className="h-4 w-4 text-muted-foreground" />
-                  <code className="text-sm flex-1">agendar/{est.slug}</code>
-                  <Button variant="ghost" size="sm" onClick={() => copyPublicLink('agendar')}>
-                    {copiedLink === `agendar/${est.slug}` ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => viewPublicPage(est.slug, 'booking')}>
-                    <ExternalLink className="h-4 w-4" />
-                  </Button>
+                <div className="flex min-w-0 flex-col gap-4 rounded-xl border bg-slate-50/70 p-4">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
+                      <CalendarClock className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold">Agendamento online</p>
+                      <p className="mt-0.5 text-sm text-muted-foreground">Permita que seus clientes escolham um serviço e horário.</p>
+                    </div>
+                  </div>
+                  <code className="block break-all rounded-md border bg-white px-3 py-2 text-sm text-slate-700">agendar/{est.slug}</code>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" onClick={() => copyPublicLink('agendar')}>
+                      {copiedLink === `agendar/${est.slug}` ? <Check className="mr-2 h-4 w-4 text-emerald-600" /> : <Copy className="mr-2 h-4 w-4" />}
+                      Copiar link
+                    </Button>
+                    <Button size="sm" onClick={() => viewPublicPage(est.slug, 'booking')}>
+                      <ExternalLink className="mr-2 h-4 w-4" />Pré-visualizar
+                    </Button>
+                  </div>
                 </div>
               )}
               {est.modules.cardapio && canAccessModule('cardapio') && (
-                <div className="flex items-center gap-2 rounded-lg border p-3">
-                  <UtensilsCrossed className="h-4 w-4 text-muted-foreground" />
-                  <code className="text-sm flex-1">cardapio/{est.slug}</code>
-                  <Button variant="ghost" size="sm" onClick={() => copyPublicLink('cardapio')}>
-                    {copiedLink === `cardapio/${est.slug}` ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => viewPublicPage(est.slug, 'menu')}>
-                    <ExternalLink className="h-4 w-4" />
-                  </Button>
+                <div className="flex min-w-0 flex-col gap-4 rounded-xl border bg-slate-50/70 p-4">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
+                      <UtensilsCrossed className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold">Cardápio digital</p>
+                      <p className="mt-0.5 text-sm text-muted-foreground">Mostre seus produtos e receba pedidos online.</p>
+                    </div>
+                  </div>
+                  <code className="block break-all rounded-md border bg-white px-3 py-2 text-sm text-slate-700">cardapio/{est.slug}</code>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" onClick={() => copyPublicLink('cardapio')}>
+                      {copiedLink === `cardapio/${est.slug}` ? <Check className="mr-2 h-4 w-4 text-emerald-600" /> : <Copy className="mr-2 h-4 w-4" />}
+                      Copiar link
+                    </Button>
+                    <Button size="sm" onClick={() => viewPublicPage(est.slug, 'menu')}>
+                      <ExternalLink className="mr-2 h-4 w-4" />Pré-visualizar
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>

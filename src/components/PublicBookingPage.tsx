@@ -125,7 +125,7 @@ export function PublicBookingPage() {
   if (confirmed) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="max-w-md w-full">
+        <div className="w-full max-w-2xl">
           <Card className="p-8 text-center animate-scale-in">
             <div
               className="mx-auto flex h-16 w-16 items-center justify-center rounded-full mb-4"
@@ -161,12 +161,12 @@ export function PublicBookingPage() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="sticky top-0 z-10 px-4 py-3 shadow-sm" style={{ backgroundColor: accent }}>
-        <div className="max-w-md mx-auto flex items-center gap-3 text-white">
+        <div className="mx-auto flex max-w-5xl items-center gap-3 text-white sm:px-2">
           <Button variant="ghost" size="icon" className="text-white hover:bg-white/20" onClick={goBack}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/20 text-white font-bold">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white/20 text-lg font-bold text-white">
               {est.theme.logo ? <img src={est.theme.logo} alt={`Logo de ${est.name}`} className="h-full w-full rounded-lg object-cover" /> : est.name.charAt(0)}
             </div>
             <div>
@@ -177,9 +177,14 @@ export function PublicBookingPage() {
         </div>
       </div>
 
-      <div className="max-w-md mx-auto p-4 pb-24">
+      <main className="mx-auto max-w-5xl px-4 pb-28 pt-6 sm:px-6 lg:px-8">
+        <div className="mb-6 rounded-3xl border bg-white p-5 shadow-sm sm:p-7">
+          <p className="mb-1 text-sm font-semibold uppercase tracking-[0.16em]" style={{ color: accent }}>Agendamento online</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">{est.name}</h1>
+          <p className="mt-2 text-sm text-slate-500 sm:text-base">Escolha o serviço e encontre o melhor horário para você.</p>
+        </div>
         {/* Progress */}
-        <div className="flex items-center justify-between mb-6 mt-2">
+        <div className="mb-6 flex items-center justify-between rounded-2xl border bg-white px-4 py-4 shadow-sm sm:px-6">
           {STEPS.map((s, i) => (
             <div key={s} className="flex items-center flex-1">
               <div className="flex flex-col items-center gap-1">
@@ -205,13 +210,14 @@ export function PublicBookingPage() {
 
         {/* Step 0: Service */}
         {step === 0 && (
-          <div className="space-y-3 animate-slide-up">
-            <h2 className="text-lg font-bold">Escolha o serviço</h2>
+          <div className="animate-slide-up">
+            <h2 className="mb-4 text-lg font-bold">Escolha o serviço</h2>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {services.map((s) => (
               <Card
                 key={s.id}
                 className={cn(
-                  'p-4 cursor-pointer transition-all border-2',
+                  'cursor-pointer border-2 p-5 transition-all hover:-translate-y-0.5 hover:shadow-md',
                   selectedService?.id === s.id ? 'border-primary shadow-md' : 'border-transparent hover:border-muted'
                 )}
                 onClick={() => setSelectedService(s)}
@@ -233,6 +239,8 @@ export function PublicBookingPage() {
                 </div>
               </Card>
             ))}
+            </div>
+            {!services.length && <Card className="p-8 text-center text-sm text-muted-foreground">Nenhum serviço disponível para agendamento.</Card>}
           </div>
         )}
 
@@ -387,11 +395,11 @@ export function PublicBookingPage() {
             </Card>
           </div>
         )}
-      </div>
+      </main>
 
       {/* Bottom nav */}
-      <div className="fixed bottom-0 left-0 right-0 border-t bg-card p-4">
-        <div className="max-w-md mx-auto flex gap-3">
+      <div className="fixed bottom-0 left-0 right-0 border-t bg-white/95 p-4 shadow-[0_-8px_24px_rgba(15,23,42,0.06)] backdrop-blur">
+        <div className="mx-auto flex max-w-5xl gap-3 sm:px-2">
           {step > 0 && !confirmed && (
             <Button variant="outline" onClick={() => setStep((s) => s - 1)} className="flex-1">
               <ChevronLeft className="h-4 w-4 mr-1" />

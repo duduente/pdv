@@ -8,6 +8,10 @@ function notifyPersistentStateChange<T>(key: string, value: T, source: string) {
   window.dispatchEvent(new CustomEvent(PERSISTENT_STATE_EVENT, { detail: { key, value, source } }));
 }
 
+export function syncPersistentState<T>(key: string, value: T) {
+  notifyPersistentStateChange(key, value, 'external-sync');
+}
+
 function readValue<T>(key: string, initialValue: T): T {
   try {
     const storedValue = window.localStorage.getItem(key);

@@ -10,6 +10,7 @@ export type AppPermission =
   | 'pdv-movements'
   | 'pdv-reports'
   | 'pdv-sessions'
+  | 'finance'
   | 'store-settings'
   | 'manage-users';
 export type StorePermission = AppPermission | '*';
@@ -25,6 +26,7 @@ export const STORE_PERMISSIONS: AppPermission[] = [
   'pdv-movements',
   'pdv-reports',
   'pdv-sessions',
+  'finance',
   'store-settings',
   'manage-users',
 ];
@@ -100,6 +102,7 @@ export interface MenuItem {
   name: string;
   description: string;
   price: number;
+  unitCost?: number;
   category: string;
   image: string;
 }
@@ -113,15 +116,29 @@ export interface Product {
   id: string;
   name: string;
   price: number;
+  unitCost?: number;
   stock: number;
+  minimumStock?: number;
   category: string;
   unit: string;
+}
+
+export interface InventoryMovement {
+  id: string;
+  productId: string;
+  productName: string;
+  type: 'sale' | 'restock' | 'adjustment' | 'return';
+  quantity: number;
+  unit?: string;
+  reason?: string;
+  createdAt: string;
 }
 
 export interface SaleItem {
   productId: string;
   name: string;
   price: number;
+  unitCost?: number;
   quantity: number;
   sourceRecordId?: string;
   professional?: string;
@@ -161,6 +178,7 @@ export interface CashSale {
   change: number;
   status?: 'paid' | 'cancelled';
   cancelledAt?: string;
+  cancellationReason?: string;
   subtotal?: number;
   serviceCharge?: number;
   commandId?: string;
@@ -177,6 +195,19 @@ export interface Command {
   status: 'open' | 'paid';
 }
 
+export interface TableReservation {
+  id: string;
+  establishmentId: string;
+  createdAt: string;
+  scheduledAt: string;
+  customerName: string;
+  phone: string;
+  partySize: number;
+  tableLabel?: string;
+  notes?: string;
+  status: 'confirmed' | 'arrived' | 'cancelled';
+}
+
 export interface MenuOrder {
   id: string;
   establishmentId: string;
@@ -185,6 +216,8 @@ export interface MenuOrder {
   total: number;
   status: 'pending' | 'paid';
   channel?: 'website' | 'delivery';
+  orderType?: 'delivery' | 'pickup';
+  trackingToken?: string;
   customerName?: string;
   address?: string;
   postalCode?: string;
@@ -206,6 +239,23 @@ export interface CashMovement {
   type: 'supply' | 'withdrawal';
   amount: number;
   note: string;
+  expenseId?: string;
+  cancelledAt?: string;
+  cancellationReason?: string;
+}
+
+export interface CashExpense {
+  id: string;
+  establishmentId: string;
+  sessionId?: string;
+  createdAt: string;
+  description: string;
+  category: string;
+  amount: number;
+  paymentMethod: PaymentMethod;
+  recordedBy: string;
+  cancelledAt?: string;
+  cancellationReason?: string;
 }
 
 export interface CashSession {
@@ -224,12 +274,26 @@ export interface CashRegisterData {
   sessions: CashSession[];
   sales: CashSale[];
   movements: CashMovement[];
+  expenses?: CashExpense[];
+  auditEvents?: AuditEvent[];
+}
+
+export interface AuditEvent {
+  id: string;
+  entityType: 'order' | 'sale' | 'expense' | 'cash_movement' | 'cash_session';
+  entityId: string;
+  action: 'created' | 'edited' | 'status_changed' | 'cancelled' | 'deleted' | 'opened' | 'closed';
+  actorId: string | null;
+  actorName: string;
+  occurredAt: string;
+  summary: string;
 }
 
 export interface CartItem {
   id: string;
   name: string;
   price: number;
+  unitCost?: number;
   quantity: number;
   image: string;
   notes?: string;

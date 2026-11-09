@@ -92,29 +92,33 @@ function ItemsTab() {
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
   const [price, setPrice] = useState('');
+  const [unitCost, setUnitCost] = useState('');
   const [cat, setCat] = useState(initialCats[0]?.name ?? '');
   const [image, setImage] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
 
   const clearForm = () => {
-    setEditingId(null); setName(''); setDesc(''); setPrice(''); setImage(''); setCat(initialCats[0]?.name ?? '');
+    setEditingId(null); setName(''); setDesc(''); setPrice(''); setUnitCost(''); setImage(''); setCat(initialCats[0]?.name ?? '');
     setEditorOpen(false);
   };
 
   const addItem = () => {
-    setEditingId(null); setName(''); setDesc(''); setPrice(''); setImage(''); setCat(initialCats[0]?.name ?? '');
+    setEditingId(null); setName(''); setDesc(''); setPrice(''); setUnitCost(''); setImage(''); setCat(initialCats[0]?.name ?? '');
     setEditorOpen(true);
   };
 
   const saveItem = () => {
     const numericPrice = Number(price);
+    const numericUnitCost = unitCost.trim() ? Number(unitCost) : undefined;
     if (!name.trim() || !Number.isFinite(numericPrice) || numericPrice <= 0) { toast.error('Informe nome e um preço maior que zero'); return; }
+    if (numericUnitCost !== undefined && (!Number.isFinite(numericUnitCost) || numericUnitCost < 0)) { toast.error('O custo deve ser um valor maior ou igual a zero'); return; }
     const nextItem: MenuItem = {
       id: editingId ?? `m${Date.now()}`,
       name: name.trim(),
       description: desc.trim(),
       price: Math.round(numericPrice * 100) / 100,
+      unitCost: numericUnitCost === undefined ? undefined : Math.round(numericUnitCost * 100) / 100,
       category: cat.trim(),
       image: image.trim(),
     };
@@ -131,7 +135,7 @@ function ItemsTab() {
   };
 
   const editItem = (item: MenuItem) => {
-    setEditingId(item.id); setName(item.name); setDesc(item.description); setPrice(String(item.price)); setCat(item.category); setImage(item.image);
+    setEditingId(item.id); setName(item.name); setDesc(item.description); setPrice(String(item.price)); setUnitCost(item.unitCost === undefined ? '' : String(item.unitCost)); setCat(item.category); setImage(item.image);
     setEditorOpen(true);
   };
 
@@ -198,6 +202,7 @@ function ItemsTab() {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="space-y-1 text-sm font-medium">Nome<Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex: Cheeseburger" required /></label>
               <label className="space-y-1 text-sm font-medium">Preço (R$)<Input type="number" min="0.01" step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} placeholder="28.90" required /></label>
+              <label className="space-y-1 text-sm font-medium">Custo unitário (R$)<Input type="number" min="0" step="0.01" value={unitCost} onChange={(event) => setUnitCost(event.target.value)} placeholder="Opcional" /><span className="block text-xs font-normal text-muted-foreground">Usado apenas nos relatórios internos.</span></label>
               <label className="space-y-1 text-sm font-medium sm:col-span-2">Descrição<Input value={desc} onChange={(event) => setDesc(event.target.value)} placeholder="Ingredientes e detalhes" /></label>
               <label className="space-y-1 text-sm font-medium">Categoria<Input value={cat} onChange={(event) => setCat(event.target.value)} placeholder="Burgers" /></label>
               <label className="space-y-1 text-sm font-medium">URL da imagem<Input type="url" value={image} onChange={(event) => setImage(event.target.value)} placeholder="https://..." /></label>
