@@ -10,6 +10,7 @@ import { usePersistentState } from '@/hooks/usePersistentState';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { CurrencyInput } from '@/components/ui/currency-input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
@@ -310,7 +311,7 @@ function ServicesTab() {
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Preço (R$)</Label>
-            <Input type="number" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="45" />
+            <CurrencyInput value={Number(price) || 0} onValueChange={(value) => setPrice(value === null ? '' : String(value))} />
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Duração (min)</Label>

@@ -677,7 +677,7 @@ export function DeliveryModule() {
               {orderType === 'delivery' && <label className="space-y-1 text-sm font-medium">CEP<Input style={accentBorderStyle} inputMode="numeric" autoComplete="postal-code" value={postalCode} onChange={(event) => void searchPostalCode(event.target.value)} placeholder="00000-000" /></label>}
               {orderType === 'delivery' && <label className="space-y-1 text-sm font-medium sm:col-span-2">Endereço de entrega<Input style={accentBorderStyle} autoComplete="street-address" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Confira e informe número/complemento" /></label>}
               <label className="space-y-1 text-sm font-medium">CPF ou CNPJ<Input style={accentBorderStyle} inputMode="numeric" maxLength={14} value={document} onChange={(event) => setDocument(digitsOnly(event.target.value).slice(0, 14))} /></label>
-              {orderType === 'delivery' && <label className="space-y-1 text-sm font-medium">Valor da entrega (R$)<CurrencyInput style={accentBorderStyle} value={deliveryFee} onValueChange={setDeliveryFee} disabled={!canEditOrderContents} /></label>}
+              {orderType === 'delivery' && <label className="space-y-1 text-sm font-medium">Valor da entrega (R$)<CurrencyInput style={accentBorderStyle} value={deliveryFee} onValueChange={(value) => setDeliveryFee(value ?? 0)} disabled={!canEditOrderContents} /></label>}
               {lookingUpPostalCode && <p className="text-xs text-muted-foreground sm:col-span-2">Buscando endereço pelo CEP...</p>}
               <p className="text-sm text-muted-foreground sm:col-span-2">{editingOrder ? 'Se você alterar itens ou valores, a forma de pagamento será informada novamente ao finalizar no caixa.' : 'Ao salvar, informe uma ou mais formas de pagamento e os respectivos valores.'}</p>
             </div>
@@ -694,7 +694,7 @@ export function DeliveryModule() {
             </div>}
             {canEditOrderContents && <div className="grid gap-2 sm:grid-cols-[1fr_120px_auto]">
               <Input style={accentBorderStyle} value={customName} onChange={(event) => setCustomName(event.target.value)} placeholder="Outro item" />
-              <CurrencyInput style={accentBorderStyle} value={customPrice} onValueChange={setCustomPrice} placeholder="Valor (R$)" />
+              <CurrencyInput style={accentBorderStyle} value={customPrice} onValueChange={(value) => setCustomPrice(value ?? 0)} placeholder="Valor (R$)" />
               <Button type="button" variant="outline" onClick={addCustomItem}><Plus className="mr-1 h-4 w-4" />Adicionar</Button>
             </div>}
             {cart.length > 0 && <div className="space-y-2 rounded-md border p-3" style={accentBorderStyle}>
@@ -766,7 +766,7 @@ export function DeliveryStoreSettings({ establishmentId }: { establishmentId: st
       <div><h2 className="text-lg font-semibold">Configurações do Delivery</h2><p className="text-sm text-muted-foreground">Cadastre entregadores e defina a taxa padrão da loja.</p></div>
       <label className="block max-w-sm space-y-1 text-sm font-medium">Valor padrão da entrega (R$)
         <CurrencyInput style={accentBorderStyle} value={settings.deliveryFee} onValueChange={(value) => {
-          setSettings((current) => ({ ...current, deliveryFee: value }));
+          setSettings((current) => ({ ...current, deliveryFee: value ?? 0 }));
         }} />
       </label>
       <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">

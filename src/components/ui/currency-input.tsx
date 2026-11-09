@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Input, type InputProps } from '@/components/ui/input';
 
 type CurrencyInputProps = Omit<InputProps, 'value' | 'onChange' | 'type'> & {
-  value: number;
-  onValueChange: (value: number) => void;
+  value: number | null;
+  onValueChange: (value: number | null) => void;
 };
 
 const currencyFormatter = new Intl.NumberFormat('pt-BR', {
@@ -11,7 +11,8 @@ const currencyFormatter = new Intl.NumberFormat('pt-BR', {
   maximumFractionDigits: 2,
 });
 
-function toDigits(value: number) {
+function toDigits(value: number | null) {
+  if (value === null) return '';
   return String(Math.round(Math.max(0, value) * 100));
 }
 
@@ -29,11 +30,11 @@ export function CurrencyInput({ value, onValueChange, ...props }: CurrencyInputP
       {...props}
       type="text"
       inputMode="numeric"
-      value={currencyFormatter.format(cents / 100)}
+      value={digits === '' ? '' : currencyFormatter.format(cents / 100)}
       onChange={(event) => {
         const nextDigits = event.target.value.replace(/\D/g, '');
         setDigits(nextDigits);
-        onValueChange((Number(nextDigits) || 0) / 100);
+        onValueChange(nextDigits === '' ? null : (Number(nextDigits) || 0) / 100);
       }}
     />
   );

@@ -10,6 +10,7 @@ import { usePersistentState } from '@/hooks/usePersistentState';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { CurrencyInput } from '@/components/ui/currency-input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -201,8 +202,8 @@ function ItemsTab() {
           <form onSubmit={submitItem} className="space-y-4">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="space-y-1 text-sm font-medium">Nome<Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex: Cheeseburger" required /></label>
-              <label className="space-y-1 text-sm font-medium">Preço (R$)<Input type="number" min="0.01" step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} placeholder="28.90" required /></label>
-              <label className="space-y-1 text-sm font-medium">Custo unitário (R$)<Input type="number" min="0" step="0.01" value={unitCost} onChange={(event) => setUnitCost(event.target.value)} placeholder="Opcional" /><span className="block text-xs font-normal text-muted-foreground">Usado apenas nos relatórios internos.</span></label>
+              <label className="space-y-1 text-sm font-medium">Preço (R$)<CurrencyInput value={Number(price) || 0} onValueChange={(value) => setPrice(value === null ? '' : String(value))} required /></label>
+              <label className="space-y-1 text-sm font-medium">Custo unitário (R$)<CurrencyInput value={unitCost.trim() ? Number(unitCost) : null} onValueChange={(value) => setUnitCost(value === null ? '' : String(value))} placeholder="Opcional" /><span className="block text-xs font-normal text-muted-foreground">Usado apenas nos relatórios internos.</span></label>
               <label className="space-y-1 text-sm font-medium sm:col-span-2">Descrição<Input value={desc} onChange={(event) => setDesc(event.target.value)} placeholder="Ingredientes e detalhes" /></label>
               <label className="space-y-1 text-sm font-medium">Categoria<Input value={cat} onChange={(event) => setCat(event.target.value)} placeholder="Burgers" /></label>
               <label className="space-y-1 text-sm font-medium">URL da imagem<Input type="url" value={image} onChange={(event) => setImage(event.target.value)} placeholder="https://..." /></label>

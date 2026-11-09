@@ -7,6 +7,7 @@ import type { Command, MenuItem, SaleItem, TableReservation } from '@/types';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { CurrencyInput } from '@/components/ui/currency-input';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
@@ -220,7 +221,7 @@ export function CommandsModule() {
             </div>}
             <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_140px_auto]">
               <Input value={itemName} onChange={(event) => setItemName(event.target.value)} placeholder="Outro item ou consumo" disabled={!selectedCommand} />
-              <Input type="number" min="0.01" step="0.01" value={itemPrice} onChange={(event) => setItemPrice(event.target.value)} placeholder="Valor (R$)" disabled={!selectedCommand} />
+              <CurrencyInput value={Number(itemPrice) || 0} onValueChange={(value) => setItemPrice(value === null ? '' : String(value))} placeholder="Valor (R$)" disabled={!selectedCommand} />
               <Button type="button" variant="outline" onClick={addManualItem} disabled={!selectedCommand}><Plus className="mr-1 h-4 w-4" />Adicionar</Button>
             </div>
           </Card>

@@ -6,6 +6,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { CurrencyInput } from '@/components/ui/currency-input';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ensureAdminMonthlyBill, loadAdminBilling, saveAdminBilling } from '@/lib/adminBilling';
 import { EMPTY_STORE_FINANCES, getBillAlert, type FinanceBill, type StoreFinances } from '@/lib/storeFinances';
 import { toast } from 'sonner';
@@ -29,7 +31,13 @@ const BILL_LABELS = {
   none: 'Sem vencimento',
 } as const;
 
-export function AdminBillingPanel({ establishments }: { establishments: Establishment[] }) {
+export function AdminBillingPanel({
+  establishments,
+  onUpdateMonthlyRevenue,
+}: {
+  establishments: Establishment[];
+  onUpdateMonthlyRevenue: (establishmentId: string, monthlyRevenue: number) => Promise<void>;
+}) {
   const { user } = useAuth();
   const [establishmentId, setEstablishmentId] = useState(establishments[0]?.id ?? '');
   const [billing, setBilling] = useState<StoreFinances>(EMPTY_STORE_FINANCES);
@@ -38,13 +46,20 @@ export function AdminBillingPanel({ establishments }: { establishments: Establis
   const [loadError, setLoadError] = useState('');
   const [recurringEnabled, setRecurringEnabled] = useState(false);
   const [recurringDay, setRecurringDay] = useState('10');
+  const [recurringAmount, setRecurringAmount] = useState('');
+  const [recurringBoletoCode, setRecurringBoletoCode] = useState('');
+  const [recurringPixCode, setRecurringPixCode] = useState('');
+  const [recurringDialogOpen, setRecurringDialogOpen] = useState(false);
+  const [addBillDialogOpen, setAddBillDialogOpen] = useState(false);
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
   const [dueDate, setDueDate] = useState(todayKey);
+  const [paymentType, setPaymentType] = useState<'boleto' | 'pix'>('boleto');
   const [boletoCode, setBoletoCode] = useState('');
   const [validUntil, setValidUntil] = useState('');
   const [editingBillId, setEditingBillId] = useState<string | null>(null);
-  const [billDraft, setBillDraft] = useState<Pick<FinanceBill, 'description' | 'amount' | 'dueDate' | 'boletoCode' | 'validUntil'> | null>(null);
+  const [savingBillId, setSavingBillId] = useState<string | null>(null);
+  const [billDraft, setBillDraft] = useState<Pick<FinanceBill, 'description' | 'amount' | 'dueDate' | 'boletoCode' | 'pixCode' | 'paymentType' | 'validUntil'> | null>(null);
 
   const selectedEstablishment = establishments.find((establishment) => establishment.id === establishmentId);
   const attentionBills = billing.bills.filter((bill) => ['overdue', 'due-soon', 'expired'].includes(getBillAlert(bill, new Date())));
@@ -67,9 +82,19 @@ export function AdminBillingPanel({ establishments }: { establishments: Establis
     void loadAdminBilling(establishmentId, Boolean(user?.isDemo))
       .then((loaded) => {
         if (!active) return;
-        setBilling(loaded);
+        const storeMonthlyAmount = establishments.find((entry) => entry.id === establishmentId)?.monthlyRevenue ?? 0;
+        const monthlyAmount = loaded.recurring.enabled
+          ? storeMonthlyAmount
+          : loaded.recurring.amount || storeMonthlyAmount;
+        const normalized = loaded.recurring.enabled && loaded.recurring.amount !== monthlyAmount
+          ? { ...loaded, recurring: { ...loaded.recurring, amount: monthlyAmount } }
+          : loaded;
+        setBilling(normalized);
         setRecurringDay(String(loaded.recurring.dueDay));
         setRecurringEnabled(loaded.recurring.enabled);
+        setRecurringAmount(String(monthlyAmount));
+        setRecurringBoletoCode(loaded.recurring.boletoCode ?? (loaded.recurring.paymentType === 'boleto' ? loaded.recurring.paymentCode : '') ?? '');
+        setRecurringPixCode(loaded.recurring.pixCode ?? (loaded.recurring.paymentType === 'pix' ? loaded.recurring.paymentCode : '') ?? '');
         setLoadedEstablishmentId(establishmentId);
       })
       .catch((error: unknown) => {
@@ -82,11 +107,11 @@ export function AdminBillingPanel({ establishments }: { establishments: Establis
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [establishmentId, user?.isDemo]);
+  }, [establishmentId, establishments, user?.isDemo]);
 
   useEffect(() => {
-    if (!selectedEstablishment || loadedEstablishmentId !== establishmentId || loading || loadError || !billing.recurring.enabled || selectedEstablishment.monthlyRevenue <= 0) return;
-    const updated = ensureAdminMonthlyBill(billing, selectedEstablishment.monthlyRevenue, new Date(), createId);
+    if (!selectedEstablishment || loadedEstablishmentId !== establishmentId || loading || loadError || !billing.recurring.enabled || billing.recurring.amount <= 0) return;
+    const updated = ensureAdminMonthlyBill(billing, billing.recurring.amount, new Date(), createId);
     if (updated === billing) return;
     setBilling(updated);
     void saveAdminBilling(selectedEstablishment.id, updated, Boolean(user?.isDemo))
@@ -101,8 +126,9 @@ export function AdminBillingPanel({ establishments }: { establishments: Establis
       toast.error('Informe um dia de vencimento entre 1 e 31.');
       return;
     }
-    if (recurringEnabled && selectedEstablishment.monthlyRevenue <= 0) {
-      toast.error('Defina uma mensalidade maior que zero no cadastro da loja antes de ativar a recorrência.');
+    const monthlyAmount = Number(recurringAmount);
+    if (!Number.isFinite(monthlyAmount) || monthlyAmount < 0 || (recurringEnabled && monthlyAmount === 0)) {
+      toast.error('Informe um valor mensal válido; a mensalidade fixa precisa ser maior que zero.');
       return;
     }
     const updated: StoreFinances = {
@@ -110,12 +136,25 @@ export function AdminBillingPanel({ establishments }: { establishments: Establis
       recurring: {
         enabled: recurringEnabled,
         dueDay: day,
-        amount: selectedEstablishment.monthlyRevenue,
+        amount: Math.round(monthlyAmount * 100) / 100,
+        paymentType: recurringBoletoCode.trim() ? 'boleto' : 'pix',
+        paymentCode: recurringBoletoCode.trim() || recurringPixCode.trim(),
+        boletoCode: recurringBoletoCode.trim(),
+        pixCode: recurringPixCode.trim(),
       },
     };
-    setBilling(updated);
-    void saveAdminBilling(selectedEstablishment.id, updated, Boolean(user?.isDemo))
-      .then(() => toast.success(recurringEnabled ? 'Mensalidade fixa configurada para esta loja.' : 'Geração automática desativada.'))
+    const updatedBilling = recurringEnabled
+      ? ensureAdminMonthlyBill(updated, monthlyAmount, new Date(), createId)
+      : updated;
+    setBilling(updatedBilling);
+    void Promise.all([
+      saveAdminBilling(selectedEstablishment.id, updatedBilling, Boolean(user?.isDemo)),
+      onUpdateMonthlyRevenue(selectedEstablishment.id, Math.round(monthlyAmount * 100) / 100),
+    ])
+      .then(() => {
+        setRecurringDialogOpen(false);
+        toast.success(recurringEnabled ? 'Mensalidade fixa configurada para esta loja.' : 'Geração automática desativada.');
+      })
       .catch((error: unknown) => toast.error(error instanceof Error ? error.message : 'Não foi possível salvar a configuração.'));
   };
 
@@ -135,18 +174,23 @@ export function AdminBillingPanel({ establishments }: { establishments: Establis
         amount: Math.round(value * 100) / 100,
         dueDate,
         boletoCode: boletoCode.trim(),
+        paymentType,
         validUntil,
       }],
     };
-    setBilling(updated);
     void saveAdminBilling(selectedEstablishment.id, updated, Boolean(user?.isDemo))
-      .then(() => toast.success('Cobrança da mensalidade Kito criada.'))
+      .then(() => {
+        setBilling(updated);
+        setAddBillDialogOpen(false);
+        toast.success('Cobrança da mensalidade Kito criada.');
+        setDescription('');
+        setAmount('');
+        setDueDate(todayKey());
+        setPaymentType('boleto');
+        setBoletoCode('');
+        setValidUntil('');
+      })
       .catch((error: unknown) => toast.error(error instanceof Error ? error.message : 'Não foi possível salvar a cobrança.'));
-    setDescription('');
-    setAmount('');
-    setDueDate(todayKey());
-    setBoletoCode('');
-    setValidUntil('');
   };
 
   const saveBill = () => {
@@ -170,12 +214,19 @@ export function AdminBillingPanel({ establishments }: { establishments: Establis
     setBillDraft(null);
   };
 
-  const updateBill = (billId: string, update: (bill: FinanceBill) => FinanceBill) => {
+  const updateBill = async (billId: string, update: (bill: FinanceBill) => FinanceBill) => {
     if (!selectedEstablishment || loadError || loadedEstablishmentId !== establishmentId) return;
     const updated = { ...billing, bills: billing.bills.map((bill) => bill.id === billId ? update(bill) : bill) };
-    setBilling(updated);
-    void saveAdminBilling(selectedEstablishment.id, updated, Boolean(user?.isDemo))
-      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : 'Não foi possível salvar a cobrança.'));
+    setSavingBillId(billId);
+    try {
+      await saveAdminBilling(selectedEstablishment.id, updated, Boolean(user?.isDemo));
+      setBilling(updated);
+      toast.success('Status de pagamento atualizado nas Finanças da loja.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível salvar o status do pagamento.');
+    } finally {
+      setSavingBillId(null);
+    }
   };
 
   return (
@@ -199,7 +250,7 @@ export function AdminBillingPanel({ establishments }: { establishments: Establis
         </label>
         {selectedEstablishment && (
           <div className="rounded-md bg-muted/50 p-3 text-sm">
-            Mensalidade configurada no cadastro da loja: <strong>{formatCurrency(selectedEstablishment.monthlyRevenue)}</strong>
+            Mensalidade Kito: <strong>{formatCurrency(selectedEstablishment.monthlyRevenue)}</strong>
           </div>
         )}
       </Card>
@@ -219,37 +270,91 @@ export function AdminBillingPanel({ establishments }: { establishments: Establis
             </Card>
           )}
           <Card className="space-y-4 p-5">
-            <div>
-              <h2 className="font-semibold">Mensalidade fixa de {selectedEstablishment.name}</h2>
-              <p className="text-sm text-muted-foreground">O valor vem da mensalidade definida no cadastro da loja. Se a recorrência estiver ativa, uma cobrança do mês é gerada ao abrir esta aba; você pode editar o código e a validade do boleto.</p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold">Mensalidade fixa</h2>
+                <p className="text-sm text-muted-foreground">
+                  {recurringEnabled
+                    ? `Ativa · dia ${recurringDay} · ${formatCurrency(Number(recurringAmount) || 0)} por mês`
+                    : 'Geração mensal desativada'}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {recurringBoletoCode ? 'Boleto' : ''}{recurringBoletoCode && recurringPixCode ? ' e ' : ''}{recurringPixCode ? 'Pix' : ''}
+                  {!recurringBoletoCode && !recurringPixCode ? 'Sem dados de pagamento' : ''}
+                </p>
+              </div>
+              <Button type="button" variant="outline" disabled={loading || Boolean(loadError) || loadedEstablishmentId !== establishmentId} onClick={() => setRecurringDialogOpen(true)}>
+                <Pencil className="mr-2 h-4 w-4" />Editar mensalidade
+              </Button>
             </div>
-            <form className="flex flex-wrap items-end gap-3" onSubmit={saveRecurringSettings}>
-              <label className="flex items-center gap-2 pb-2 text-sm font-medium">
-                <input type="checkbox" checked={recurringEnabled} onChange={(event) => setRecurringEnabled(event.target.checked)} />
-                Gerar mensalidade todo mês
-              </label>
-              <label className="w-40 space-y-1 text-sm font-medium">Dia do vencimento
-                <Input type="number" min="1" max="31" value={recurringDay} onChange={(event) => setRecurringDay(event.target.value)} />
-              </label>
-              <p className="pb-2 text-sm text-muted-foreground">Valor mensal: {formatCurrency(selectedEstablishment.monthlyRevenue)}</p>
-              <Button type="submit" disabled={loading || Boolean(loadError) || loadedEstablishmentId !== establishmentId}>Salvar dia fixo</Button>
-            </form>
           </Card>
 
-          <Card className="space-y-4 p-5">
-            <div>
-              <h2 className="font-semibold">Gerar cobrança avulsa</h2>
-              <p className="text-sm text-muted-foreground">Use para uma cobrança manual ou para lançar um boleto específico desta mensalidade.</p>
-            </div>
-            <form className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5" onSubmit={addBill}>
-              <label className="space-y-1 text-sm font-medium">Descrição<Input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Mensalidade Kito" required /></label>
-              <label className="space-y-1 text-sm font-medium">Valor (R$)<Input type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required /></label>
-              <label className="space-y-1 text-sm font-medium">Vencimento<Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} required /></label>
-              <label className="space-y-1 text-sm font-medium">Código do boleto<Input value={boletoCode} onChange={(event) => setBoletoCode(event.target.value)} /></label>
-              <label className="space-y-1 text-sm font-medium">Validade do boleto<Input type="date" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} /></label>
-              <div className="sm:col-span-2 lg:col-span-5"><Button type="submit" disabled={loading || Boolean(loadError) || loadedEstablishmentId !== establishmentId}><Plus className="mr-2 h-4 w-4" />Gerar cobrança</Button></div>
-            </form>
-          </Card>
+          <Dialog open={recurringDialogOpen} onOpenChange={setRecurringDialogOpen}>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Editar mensalidade Kito</DialogTitle>
+                <DialogDescription>Configure o valor, vencimento e formas de pagamento de {selectedEstablishment.name}.</DialogDescription>
+              </DialogHeader>
+              <form className="space-y-4" onSubmit={saveRecurringSettings}>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex items-center gap-2 text-sm font-medium sm:col-span-2">
+                    <input type="checkbox" checked={recurringEnabled} onChange={(event) => setRecurringEnabled(event.target.checked)} />
+                    Gerar mensalidade todo mês
+                  </label>
+                  <label className="space-y-1 text-sm font-medium">Valor mensal (R$)
+                    <CurrencyInput value={Number(recurringAmount) || 0} onValueChange={(value) => setRecurringAmount(value === null ? '' : String(value))} />
+                  </label>
+                  <label className="space-y-1 text-sm font-medium">Dia do vencimento
+                    <Input type="number" min="1" max="31" value={recurringDay} onChange={(event) => setRecurringDay(event.target.value)} />
+                  </label>
+                  <label className="space-y-1 text-sm font-medium">Código do boleto (opcional)
+                    <Input value={recurringBoletoCode} onChange={(event) => setRecurringBoletoCode(event.target.value)} />
+                  </label>
+                  <label className="space-y-1 text-sm font-medium">Chave ou código Pix (opcional)
+                    <Input value={recurringPixCode} onChange={(event) => setRecurringPixCode(event.target.value)} />
+                  </label>
+                </div>
+                <p className="text-xs text-muted-foreground">Preencha um ou os dois dados. Quando ambos estiverem cadastrados, o cliente poderá escolher Pix ou boleto.</p>
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setRecurringDialogOpen(false)}>Cancelar</Button>
+                  <Button type="submit" disabled={loading || Boolean(loadError) || loadedEstablishmentId !== establishmentId}>Salvar mensalidade</Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+
+          <div className="flex justify-end">
+            <Button type="button" onClick={() => setAddBillDialogOpen(true)} disabled={loading || Boolean(loadError) || loadedEstablishmentId !== establishmentId}>
+              <Plus className="mr-2 h-4 w-4" />Gerar cobrança avulsa
+            </Button>
+          </div>
+          <Dialog open={addBillDialogOpen} onOpenChange={setAddBillDialogOpen}>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Gerar cobrança avulsa</DialogTitle>
+                <DialogDescription>Crie uma cobrança específica da mensalidade Kito para {selectedEstablishment.name}.</DialogDescription>
+              </DialogHeader>
+              <form className="space-y-4" onSubmit={addBill}>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-1 text-sm font-medium">Descrição<Input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Mensalidade Kito" required /></label>
+                  <label className="space-y-1 text-sm font-medium">Valor (R$)<CurrencyInput value={Number(amount) || 0} onValueChange={(value) => setAmount(value === null ? '' : String(value))} required /></label>
+                  <label className="space-y-1 text-sm font-medium">Vencimento<Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} required /></label>
+                  <label className="space-y-1 text-sm font-medium">Tipo de pagamento
+                    <select value={paymentType} onChange={(event) => setPaymentType(event.target.value as 'boleto' | 'pix')} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                      <option value="boleto">Boleto</option>
+                      <option value="pix">Pix</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1 text-sm font-medium">{paymentType === 'pix' ? 'Chave ou código Pix' : 'Código do boleto'}<Input value={boletoCode} onChange={(event) => setBoletoCode(event.target.value)} /></label>
+                  <label className="space-y-1 text-sm font-medium">{paymentType === 'pix' ? 'Validade (opcional)' : 'Validade do boleto'}<Input type="date" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} /></label>
+                </div>
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setAddBillDialogOpen(false)}>Cancelar</Button>
+                  <Button type="submit" disabled={loading || Boolean(loadError) || loadedEstablishmentId !== establishmentId}><Plus className="mr-2 h-4 w-4" />Gerar cobrança</Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
 
           <section className="space-y-3">
             <h2 className="font-semibold">Cobranças de {selectedEstablishment.name}</h2>
@@ -263,9 +368,16 @@ export function AdminBillingPanel({ establishments }: { establishments: Establis
                   {isEditing ? (
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                       <label className="space-y-1 text-sm font-medium">Descrição<Input value={billDraft.description} onChange={(event) => setBillDraft({ ...billDraft, description: event.target.value })} /></label>
-                      <label className="space-y-1 text-sm font-medium">Valor<Input type="number" min="0.01" step="0.01" value={billDraft.amount} onChange={(event) => setBillDraft({ ...billDraft, amount: Number(event.target.value) })} /></label>
+                      <label className="space-y-1 text-sm font-medium">Valor<CurrencyInput value={billDraft.amount} onValueChange={(value) => setBillDraft({ ...billDraft, amount: value ?? 0 })} /></label>
                       <label className="space-y-1 text-sm font-medium">Vencimento<Input type="date" value={billDraft.dueDate} onChange={(event) => setBillDraft({ ...billDraft, dueDate: event.target.value })} /></label>
-                      <label className="space-y-1 text-sm font-medium">Código<Input value={billDraft.boletoCode} onChange={(event) => setBillDraft({ ...billDraft, boletoCode: event.target.value })} /></label>
+                      <label className="space-y-1 text-sm font-medium">Tipo de pagamento
+                        <select value={billDraft.paymentType ?? 'boleto'} onChange={(event) => setBillDraft({ ...billDraft, paymentType: event.target.value as 'boleto' | 'pix' })} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                          <option value="boleto">Boleto</option>
+                          <option value="pix">Pix</option>
+                        </select>
+                      </label>
+                      <label className="space-y-1 text-sm font-medium">{billDraft.paymentType === 'pix' ? 'Chave ou código Pix' : 'Código do boleto'}<Input value={billDraft.boletoCode} onChange={(event) => setBillDraft({ ...billDraft, boletoCode: event.target.value })} /></label>
+                      <label className="space-y-1 text-sm font-medium">Chave/código Pix adicional<Input value={billDraft.pixCode ?? ''} onChange={(event) => setBillDraft({ ...billDraft, pixCode: event.target.value })} /></label>
                       <label className="space-y-1 text-sm font-medium">Validade<Input type="date" value={billDraft.validUntil} onChange={(event) => setBillDraft({ ...billDraft, validUntil: event.target.value })} /></label>
                       <div className="flex gap-2 sm:col-span-2 lg:col-span-5">
                         <Button type="button" size="sm" onClick={saveBill}>Salvar</Button>
@@ -281,17 +393,28 @@ export function AdminBillingPanel({ establishments }: { establishments: Establis
                             {status === 'overdue' || status === 'expired' ? <AlertTriangle className="mr-1 h-3 w-3" /> : null}
                             {BILL_LABELS[status]}
                           </Badge>
-                          {bill.recurringMonth && <Badge variant="outline">Mensalidade Kito</Badge>}
+                          {bill.recurringMonth && <Badge variant="outline">Mensalidade Kito · {new Date(`${bill.recurringMonth}-01T00:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</Badge>}
                         </div>
                         <p className="mt-1 text-sm text-muted-foreground">Vencimento: {new Date(`${bill.dueDate}T00:00:00`).toLocaleDateString('pt-BR')} · {formatCurrency(bill.amount)}</p>
-                        {bill.boletoCode && <p className="break-all text-sm text-muted-foreground">Código: {bill.boletoCode}</p>}
+                        {bill.boletoCode && bill.paymentType !== 'pix' && <p className="break-all text-sm text-muted-foreground">Código do boleto: {bill.boletoCode}</p>}
+                        {bill.pixCode && <p className="break-all text-sm text-muted-foreground">Chave ou código Pix: {bill.pixCode}</p>}
+                        {bill.paymentType === 'pix' && !bill.pixCode && bill.boletoCode && <p className="break-all text-sm text-muted-foreground">Chave ou código Pix: {bill.boletoCode}</p>}
                         {bill.validUntil && <p className="text-sm text-muted-foreground">Validade: {new Date(`${bill.validUntil}T00:00:00`).toLocaleDateString('pt-BR')}</p>}
                       </div>
                       <div className="flex gap-2">
-                        <Button type="button" size="sm" variant="outline" onClick={() => updateBill(bill.id, (entry) => ({ ...entry, paidAt: entry.paidAt ? undefined : new Date().toISOString() }))}><Check className="mr-1 h-4 w-4" />{bill.paidAt ? 'Reabrir' : 'Marcar paga'}</Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={savingBillId === bill.id}
+                          onClick={() => void updateBill(bill.id, (entry) => ({ ...entry, paidAt: entry.paidAt ? undefined : new Date().toISOString() }))}
+                        >
+                          <Check className="mr-1 h-4 w-4" />
+                          {savingBillId === bill.id ? 'Salvando...' : bill.paidAt ? 'Reabrir pagamento' : bill.recurringMonth ? 'Marcar mensalidade paga' : 'Marcar paga'}
+                        </Button>
                         <Button type="button" size="icon" variant="ghost" aria-label={`Editar ${bill.description}`} onClick={() => {
                           setEditingBillId(bill.id);
-                          setBillDraft({ description: bill.description, amount: bill.amount, dueDate: bill.dueDate, boletoCode: bill.boletoCode, validUntil: bill.validUntil });
+                          setBillDraft({ description: bill.description, amount: bill.amount, dueDate: bill.dueDate, boletoCode: bill.boletoCode, pixCode: bill.pixCode, paymentType: bill.paymentType ?? 'boleto', validUntil: bill.validUntil });
                         }}><Pencil className="h-4 w-4" /></Button>
                         <Button type="button" size="icon" variant="ghost" className="text-destructive" aria-label={`Excluir ${bill.description}`} onClick={() => {
                           if (window.confirm(`Excluir a cobrança "${bill.description}"?`)) {

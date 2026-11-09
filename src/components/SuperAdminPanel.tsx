@@ -10,6 +10,7 @@ import { MODULE_LABELS, formatCurrency } from '@/mockData';
 import type { Establishment, ModuleKey } from '@/types';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { CurrencyInput } from '@/components/ui/currency-input';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -41,6 +42,7 @@ export function SuperAdminPanel() {
   const { establishments, updateEstablishment, createEstablishment, deleteEstablishment, viewPublicPage } = useApp();
   const [search, setSearch] = useState('');
   const [editTarget, setEditTarget] = useState<Establishment | null>(null);
+  const [monthlyRevenueTarget, setMonthlyRevenueTarget] = useState<Establishment | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [usersOpen, setUsersOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'stores' | 'finances'>('stores');
@@ -95,7 +97,10 @@ export function SuperAdminPanel() {
         </Button>
       </div>
       {activeTab === 'finances' ? (
-        <AdminBillingPanel establishments={establishments} />
+        <AdminBillingPanel
+          establishments={establishments}
+          onUpdateMonthlyRevenue={(id, monthlyRevenue) => updateEstablishment(id, { monthlyRevenue })}
+        />
       ) : (
       <>
       {/* Stats Cards */}
@@ -218,7 +223,18 @@ export function SuperAdminPanel() {
                         {est.plan}
                       </Badge>
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">{formatCurrency(est.monthlyRevenue)}</TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-auto gap-1 px-2 py-1 font-semibold tabular-nums"
+                        aria-label={`Editar mensalidade Kito de ${est.name}, atualmente ${formatCurrency(est.monthlyRevenue)}`}
+                        onClick={() => setMonthlyRevenueTarget(est)}
+                      >
+                        {formatCurrency(est.monthlyRevenue)}
+                        <Pencil className="h-3 w-3 text-muted-foreground" />
+                      </Button>
+                    </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-1">
                         {activeModules.length === 0 ? (
@@ -350,6 +366,21 @@ export function SuperAdminPanel() {
           }}
         />
       )}
+      {monthlyRevenueTarget && (
+        <MonthlyRevenueModal
+          establishment={monthlyRevenueTarget}
+          onClose={() => setMonthlyRevenueTarget(null)}
+          onSave={async (monthlyRevenue) => {
+            try {
+              await updateEstablishment(monthlyRevenueTarget.id, { monthlyRevenue });
+              toast.success(`Mensalidade de ${monthlyRevenueTarget.name} atualizada.`);
+              setMonthlyRevenueTarget(null);
+            } catch (reason) {
+              toast.error(reason instanceof Error ? reason.message : 'Não foi possível atualizar a mensalidade.');
+            }
+          }}
+        />
+      )}
       {createOpen && (
         <CreateEstablishmentModal
           existingSlugs={establishments.map((establishment) => establishment.slug)}
@@ -435,7 +466,7 @@ function CreateEstablishmentModal({
             <label className="space-y-1 text-sm font-medium">E-mail<Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="contato@empresa.com" /></label>
             <label className="space-y-1 text-sm font-medium">WhatsApp (opcional)<Input value={whatsapp} onChange={(event) => setWhatsapp(event.target.value)} placeholder="5511999999999" /></label>
             <label className="space-y-1 text-sm font-medium sm:col-span-2">Plano<Input value={plan} onChange={(event) => setPlan(event.target.value)} /></label>
-            <label className="space-y-1 text-sm font-medium sm:col-span-2">Mensalidade (R$)<Input type="number" min="0" step="0.01" value={monthlyRevenue} onChange={(event) => setMonthlyRevenue(event.target.value)} /></label>
+            <label className="space-y-1 text-sm font-medium sm:col-span-2">Mensalidade Kito (R$)<CurrencyInput value={Number(monthlyRevenue) || 0} onValueChange={(value) => setMonthlyRevenue(value === null ? '' : String(value))} /><span className="block text-xs font-normal text-muted-foreground">Valor mensal que será usado para as cobranças da assinatura.</span></label>
           </div>
           <div className="rounded-md border p-4">
             <h3 className="mb-2 text-sm font-semibold">Módulos</h3>
@@ -485,8 +516,6 @@ function EditEstablishmentModal({
   const [owner, setOwner] = useState(establishment.owner);
   const [email, setEmail] = useState(establishment.email);
   const [plan, setPlan] = useState(establishment.plan);
-  const [monthlyRevenue, setMonthlyRevenue] = useState(String(establishment.monthlyRevenue));
-  const [monthlyRevenueError, setMonthlyRevenueError] = useState('');
   const [status, setStatus] = useState(establishment.status);
   const [whatsapp, setWhatsapp] = useState(establishment.whatsapp);
   const [accentColor, setAccentColor] = useState(establishment.theme.accentColor);
@@ -505,7 +534,7 @@ function EditEstablishmentModal({
             Editar Estabelecimento
           </DialogTitle>
           <DialogDescription>
-            Configure os dados, a mensalidade e os módulos do cliente.
+            Configure os dados e os módulos. Para alterar a mensalidade, clique no valor da tabela.
           </DialogDescription>
         </DialogHeader>
 
@@ -532,11 +561,6 @@ function EditEstablishmentModal({
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Plano</label>
               <Input value={plan} onChange={(e) => setPlan(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Mensalidade (R$)</label>
-              <Input type="number" min="0" step="0.01" value={monthlyRevenue} onChange={(e) => { setMonthlyRevenue(e.target.value); setMonthlyRevenueError(''); }} />
-              {monthlyRevenueError && <p role="alert" className="text-xs text-destructive">{monthlyRevenueError}</p>}
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Status</label>
@@ -581,17 +605,11 @@ function EditEstablishmentModal({
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
           <Button onClick={() => {
-            const monthlyAmount = Number(monthlyRevenue);
-            if (!Number.isFinite(monthlyAmount) || monthlyAmount < 0) {
-              setMonthlyRevenueError('Informe um valor válido, maior ou igual a zero.');
-              return;
-            }
             onSave({
               name: name.trim(),
               owner: owner.trim(),
               email: email.trim(),
               plan: plan.trim(),
-              monthlyRevenue: Math.round(monthlyAmount * 100) / 100,
               status,
               modules,
               whatsapp: whatsapp.replace(/\D/g, ''),
@@ -600,6 +618,51 @@ function EditEstablishmentModal({
           }}>
             Salvar alterações
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function MonthlyRevenueModal({
+  establishment,
+  onClose,
+  onSave,
+}: {
+  establishment: Establishment;
+  onClose: () => void;
+  onSave: (monthlyRevenue: number) => Promise<void>;
+}) {
+  const [monthlyRevenue, setMonthlyRevenue] = useState(establishment.monthlyRevenue);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!Number.isFinite(monthlyRevenue) || monthlyRevenue < 0) {
+      toast.error('Informe um valor válido, maior ou igual a zero.');
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(Math.round(monthlyRevenue * 100) / 100);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open && !saving) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Mensalidade Kito</DialogTitle>
+          <DialogDescription>Altere o valor mensal de {establishment.name}.</DialogDescription>
+        </DialogHeader>
+        <label className="space-y-1 text-sm font-medium">
+          Valor mensal (R$)
+          <CurrencyInput autoFocus value={monthlyRevenue} onValueChange={(value) => setMonthlyRevenue(value ?? 0)} />
+        </label>
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={saving} onClick={onClose}>Cancelar</Button>
+          <Button type="button" disabled={saving} onClick={() => void save()}>{saving ? 'Salvando...' : 'Salvar mensalidade'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

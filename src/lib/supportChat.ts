@@ -302,7 +302,7 @@ const HELP_ANSWERS: HelpAnswer[] = [
       'mensalidade kito', 'boleto do kito', 'boleto do sistema', 'cobranca do kito',
       'pagar o kito', 'financeiro do admin', 'mensalidade do programa',
     ],
-    answer: 'A mensalidade do Kito e os boletos cobrados pelo sistema são gerenciados somente pelo Super Admin. No Painel Super Admin, abra Finanças do Kito, selecione a loja e configure o dia fixo ou gere uma cobrança com vencimento, código e validade. A aba Finanças da loja é separada e serve para o lojista controlar as contas próprias do estabelecimento.',
+    answer: 'A mensalidade do Kito e as cobranças do sistema são gerenciadas somente pelo Super Admin. No Painel Super Admin, abra Finanças do Kito, selecione a loja, ajuste o valor mensal e configure vencimento, código do boleto e/ou chave Pix. Se os dois meios estiverem cadastrados, o cliente escolhe Pix ou boleto na aba Finanças. O lojista pode consultar essas cobranças, mas não alterá-las; os boletos próprios da loja ficam em uma lista separada.',
   },
   {
     keywords: [
@@ -310,7 +310,7 @@ const HELP_ANSWERS: HelpAnswer[] = [
       'boleto vencendo', 'boleto vencido', 'cadastrar boleto', 'codigo do boleto',
       'dia fixo do boleto', 'cobranca mensal recorrente',
     ],
-    answer: 'A aba Finanças no menu da loja serve para o lojista registrar e acompanhar boletos e contas próprias, incluindo cobranças avulsas e recorrentes, código, validade e vencimento. Ela não permite criar nem alterar cobranças da mensalidade Kito; isso é exclusivo do Super Admin, no Painel Super Admin → Finanças do Kito. As contas da loja podem ser acessadas por subusuários com a permissão “Finanças · Boletos e mensalidades”.',
+    answer: 'A aba Finanças no menu da loja permite registrar e acompanhar boletos e contas próprias, incluindo cobranças avulsas e recorrentes, código, validade e vencimento. As cobranças da mensalidade Kito aparecem separadamente para consulta, com indicação de boleto ou Pix, e não podem ser alteradas pelo lojista; o Super Admin as gerencia no Painel Super Admin → Finanças do Kito. As finanças podem ser acessadas por subusuários com a permissão “Finanças · Boletos e mensalidades”.',
   },
   {
     keywords: [

@@ -19,6 +19,7 @@ import type {
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { CurrencyInput } from '@/components/ui/currency-input';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
@@ -781,7 +782,7 @@ function SalesTab({
           {origin === 'avulso' ? (
             <div className="grid gap-3 sm:grid-cols-[1fr_140px_auto]">
               <Input value={manualName} onChange={(event) => setManualName(event.target.value)} placeholder="Descrição do item ou serviço" />
-              <Input type="number" min="0.01" step="0.01" value={manualPrice} onChange={(event) => setManualPrice(event.target.value)} placeholder="Valor (R$)" />
+              <CurrencyInput value={Number(manualPrice) || 0} onValueChange={(value) => setManualPrice(value === null ? '' : String(value))} placeholder="Valor (R$)" />
               <Button type="button" onClick={addManualItem}><Plus className="mr-1 h-4 w-4" />Adicionar</Button>
             </div>
           ) : (
@@ -1021,7 +1022,7 @@ function MovementsTab({
           <Button type="button" size="sm" variant={type === 'withdrawal' ? 'default' : 'outline'} onClick={() => setType('withdrawal')}><ArrowUpCircle className="mr-1 h-4 w-4" />Sangria</Button>
           <Button type="button" size="sm" variant={type === 'expense' ? 'default' : 'outline'} onClick={() => setType('expense')}><DollarSign className="mr-1 h-4 w-4" />Despesa</Button>
         </div>
-        <label className="block space-y-1 text-sm font-medium">Valor (R$)<Input type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0,00" /></label>
+        <label className="block space-y-1 text-sm font-medium">Valor (R$)<CurrencyInput value={Number(amount) || 0} onValueChange={(value) => setAmount(value === null ? '' : String(value))} /></label>
         <label className="block space-y-1 text-sm font-medium">{type === 'expense' ? 'Descrição' : 'Motivo'}<Input value={note} onChange={(event) => setNote(event.target.value)} placeholder={type === 'expense' ? 'Ex.: conta de energia' : 'Ex.: reforço de troco'} /></label>
         {type === 'expense' && <>
           <label className="block space-y-1 text-sm font-medium">Categoria<Input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Ex.: aluguel, insumos, energia" /></label>
@@ -1295,11 +1296,11 @@ function CashSessionTab({
       <Card className="space-y-4 p-5">
         <div className="flex items-center gap-2"><div className={`flex h-9 w-9 items-center justify-center rounded-md ${activeSession ? 'bg-emerald-100 text-emerald-700' : 'bg-muted text-muted-foreground'}`}>{activeSession ? <UnlockKeyhole className="h-4 w-4" /> : <LockKeyhole className="h-4 w-4" />}</div><div><h2 className="font-semibold">{activeSession ? 'Sessão aberta' : 'Caixa fechado'}</h2><p className="text-xs text-muted-foreground">{activeSession ? `Desde ${new Date(activeSession.openedAt).toLocaleString('pt-BR')}` : 'Abra uma sessão para começar a vender.'}</p></div></div>
         {!activeSession ? <>
-          <label className="block space-y-1 text-sm font-medium">Saldo inicial (R$)<Input type="number" min="0" step="0.01" value={openingAmount} onChange={(event) => setOpeningAmount(event.target.value)} placeholder="0,00" /></label>
+          <label className="block space-y-1 text-sm font-medium">Saldo inicial (R$)<CurrencyInput value={Number(openingAmount) || 0} onValueChange={(value) => setOpeningAmount(value === null ? '' : String(value))} /></label>
           <Button type="button" onClick={open}><UnlockKeyhole className="mr-2 h-4 w-4" />Abrir caixa</Button>
         </> : <>
           <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Saldo esperado em dinheiro</p><p className="text-xl font-bold">{money(expected)}</p></div>
-          <label className="block space-y-1 text-sm font-medium">Valor contado (R$)<Input type="number" min="0" step="0.01" value={countedAmount} onChange={(event) => setCountedAmount(event.target.value)} placeholder="Informe a contagem" /></label>
+          <label className="block space-y-1 text-sm font-medium">Valor contado (R$)<CurrencyInput value={Number(countedAmount) || 0} onValueChange={(value) => setCountedAmount(value === null ? '' : String(value))} /></label>
           {countedAmount !== '' && <p className="text-sm text-muted-foreground">Diferença: <strong className={Number(countedAmount) === expected ? 'text-emerald-700' : 'text-amber-700'}>{money(Number(countedAmount) - expected)}</strong></p>}
           <Button type="button" variant="destructive" onClick={close}><LockKeyhole className="mr-2 h-4 w-4" />Fechar caixa</Button>
         </>}

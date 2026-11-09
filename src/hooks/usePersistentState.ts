@@ -3,6 +3,16 @@ import { useAuth } from '@/auth/AuthContext';
 import { supabase } from '@/lib/supabase';
 
 const PERSISTENT_STATE_EVENT = 'app:persistent-state-change';
+export const PERSISTENT_STATE_ERROR_EVENT = 'app:persistent-state-error';
+export const PERSISTENT_STATE_SAVED_EVENT = 'app:persistent-state-saved';
+
+function notifyPersistentStateError(key: string, message: string) {
+  window.dispatchEvent(new CustomEvent(PERSISTENT_STATE_ERROR_EVENT, { detail: { key, message } }));
+}
+
+function notifyPersistentStateSaved(key: string) {
+  window.dispatchEvent(new CustomEvent(PERSISTENT_STATE_SAVED_EVENT, { detail: { key } }));
+}
 
 function notifyPersistentStateChange<T>(key: string, value: T, source: string) {
   window.dispatchEvent(new CustomEvent(PERSISTENT_STATE_EVENT, { detail: { key, value, source } }));
@@ -24,8 +34,10 @@ function readValue<T>(key: string, initialValue: T): T {
 export function usePersistentState<T>(
   key: string,
   initialValue: T,
-): [T, Dispatch<SetStateAction<T>>] {
+  options?: { readOnly?: boolean },
+): [T, Dispatch<SetStateAction<T>>, boolean] {
   const { user } = useAuth();
+  const isReadOnly = options?.readOnly ?? false;
   const usesRemoteStorage = Boolean(supabase && user && !user.isDemo);
   const isEstablishmentIndex = key === 'establishments';
   const instanceId = useRef(crypto.randomUUID());
@@ -39,6 +51,7 @@ export function usePersistentState<T>(
   }));
   const isCurrentKey = storedState.key === key;
   const value = isCurrentKey ? storedState.value : initialValue;
+  const isLoaded = isCurrentKey && storedState.loaded;
 
   useEffect(() => {
     const handleChange = (event: Event) => {
@@ -98,6 +111,7 @@ export function usePersistentState<T>(
         .maybeSingle();
       if (!active) return;
       if (error) {
+        notifyPersistentStateError(key, error.message);
         setStoredState({ key, value: initialValueRef.current, loaded: true });
         return;
       }
@@ -107,18 +121,26 @@ export function usePersistentState<T>(
       }
 
       const legacyValue = readValue(key, initialValueRef.current);
+      if (isReadOnly) {
+        setStoredState({ key, value: initialValueRef.current, loaded: true });
+        return;
+      }
       const { error: insertError } = await supabase.from('tenant_records').upsert({
         storage_key: key,
         tenant_id: tenantId,
         value: legacyValue,
       }, { onConflict: 'storage_key' });
-      if (active) setStoredState({ key, value: insertError ? initialValueRef.current : legacyValue, loaded: true });
+      if (active) {
+        if (insertError) notifyPersistentStateError(key, insertError.message);
+        setStoredState({ key, value: insertError ? initialValueRef.current : legacyValue, loaded: true });
+      }
     })();
 
     return () => { active = false; };
-  }, [isEstablishmentIndex, key, usesRemoteStorage]);
+  }, [isEstablishmentIndex, isReadOnly, key, usesRemoteStorage]);
 
   useEffect(() => {
+    if (isReadOnly) return;
     if (!isCurrentKey || !storedState.loaded) return;
     if (skipNextPersist.current) {
       skipNextPersist.current = false;
@@ -133,18 +155,23 @@ export function usePersistentState<T>(
         value,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'storage_key' }).then(({ error }) => {
-        if (!error) notifyPersistentStateChange(key, value, instanceId.current);
+        if (error) notifyPersistentStateError(key, error.message);
+        else {
+          notifyPersistentStateChange(key, value, instanceId.current);
+          notifyPersistentStateSaved(key);
+        }
       });
       return;
     }
     if (usesRemoteStorage && isEstablishmentIndex) return;
     try {
       window.localStorage.setItem(key, JSON.stringify(value));
+      notifyPersistentStateChange(key, value, instanceId.current);
+      notifyPersistentStateSaved(key);
     } catch {
-      // Storage may be unavailable or full; keep the in-memory state usable.
+      notifyPersistentStateError(key, 'O armazenamento local está indisponível ou sem espaço.');
     }
-    notifyPersistentStateChange(key, value, instanceId.current);
-  }, [isEstablishmentIndex, isCurrentKey, key, storedState.loaded, usesRemoteStorage, value]);
+  }, [isEstablishmentIndex, isCurrentKey, isReadOnly, key, storedState.loaded, usesRemoteStorage, value]);
 
   const setValue = useCallback<Dispatch<SetStateAction<T>>>((nextValue) => {
     setStoredState((currentState) => {
@@ -162,5 +189,5 @@ export function usePersistentState<T>(
     });
   }, [initialValue, key, usesRemoteStorage]);
 
-  return [value, setValue];
+  return [value, setValue, isLoaded];
 }

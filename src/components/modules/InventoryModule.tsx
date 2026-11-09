@@ -7,6 +7,7 @@ import { usePersistentState } from '@/hooks/usePersistentState';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { CurrencyInput } from '@/components/ui/currency-input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -257,11 +258,11 @@ export function InventoryModule() {
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Preço (R$)</Label>
-            <Input type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="32.90" />
+            <CurrencyInput value={Number(price) || 0} onValueChange={(value) => setPrice(value === null ? '' : String(value))} />
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Custo unitário (R$)</Label>
-            <Input type="number" min="0" step="0.01" value={unitCost} onChange={(e) => setUnitCost(e.target.value)} placeholder="Opcional" />
+            <CurrencyInput value={unitCost.trim() ? Number(unitCost) : null} onValueChange={(value) => setUnitCost(value === null ? '' : String(value))} placeholder="Opcional" />
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Estoque</Label>
@@ -341,15 +342,14 @@ export function InventoryModule() {
                   </TableCell>
                   <TableCell className="font-mono">{formatCurrency(p.price)}</TableCell>
                   <TableCell>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
+                    <CurrencyInput
                       aria-label={`Custo unitário para ${p.name}`}
                       placeholder="Não informado"
-                      value={costDrafts[p.id] ?? (p.unitCost === undefined ? '' : String(p.unitCost))}
+                      value={(costDrafts[p.id] ?? (p.unitCost === undefined ? '' : String(p.unitCost))).trim()
+                        ? Number(costDrafts[p.id] ?? p.unitCost)
+                        : null}
                       onFocus={() => setCostDrafts((current) => ({ ...current, [p.id]: String(p.unitCost ?? '') }))}
-                      onChange={(event) => setCostDrafts((current) => ({ ...current, [p.id]: event.target.value }))}
+                      onValueChange={(value) => setCostDrafts((current) => ({ ...current, [p.id]: value === null ? '' : String(value) }))}
                       onBlur={() => updateProductCost(p.id)}
                       className="w-28"
                     />

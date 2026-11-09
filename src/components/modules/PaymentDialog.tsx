@@ -130,7 +130,7 @@ export function PaymentDialog({
                 </label>
                 <label className="space-y-1 text-sm font-medium">
                   Valor
-                  <CurrencyInput value={split.amount} onValueChange={(amount) => updateSplit(index, { amount })} />
+                  <CurrencyInput value={split.amount} onValueChange={(amount) => updateSplit(index, { amount: amount ?? 0 })} />
                 </label>
                 {splits.length > 1 && (
                   <Button type="button" variant="ghost" size="icon" aria-label="Remover forma de pagamento" onClick={() => removeSplit(index)}>
@@ -153,7 +153,7 @@ export function PaymentDialog({
             <div className="grid grid-cols-2 gap-3">
               <label className="space-y-1 text-sm font-medium">
                 Dinheiro recebido
-                <CurrencyInput value={cashReceived} onValueChange={setCashReceived} />
+                <CurrencyInput value={cashReceived} onValueChange={(amount) => setCashReceived(amount ?? 0)} />
               </label>
               <div className="space-y-1 text-sm font-medium">
                 Troco
