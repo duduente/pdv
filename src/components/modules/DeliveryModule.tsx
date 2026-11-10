@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bike, Bell, Check, Clock3, Pencil, Plus, Printer, Truck, UserRound, X } from 'lucide-react';
+import { Ban, Bike, Bell, Check, ChevronDown, Clock3, Pencil, Plus, Printer, Truck, UserRound, Volume2, VolumeX, X } from 'lucide-react';
 import { useAuth } from '@/auth/AuthContext';
 import { useApp } from '@/store';
 import { formatCurrency, menuItems as initialMenuItems } from '@/mockData';
@@ -14,7 +14,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { CurrencyInput } from '@/components/ui/currency-input';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Textarea } from '@/components/ui/textarea';
 import { PaymentDialog } from '@/components/modules/PaymentDialog';
 import { AuditHistory } from '@/components/modules/AuditHistory';
 import { toast } from 'sonner';
@@ -36,6 +37,7 @@ const STATUS_DETAILS: Record<DeliveryStatus, { label: string; className: string 
   production: { label: 'EM PRODUÇÃO', className: 'border-yellow-300 bg-yellow-100 text-yellow-900' },
   dispatched: { label: 'DESPACHADO', className: 'border-red-300 bg-red-100 text-red-900' },
   finalized: { label: 'FINALIZADO', className: 'border-slate-300 bg-slate-200 text-slate-700' },
+  cancelled: { label: 'CANCELADO', className: 'border-red-300 bg-red-100 text-red-900' },
 };
 
 function parseOrders(value: unknown): MenuOrder[] {
@@ -56,6 +58,25 @@ function createId() {
   return globalThis.crypto?.randomUUID?.() ?? `delivery-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function playOrderAlert(context: AudioContext) {
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  const startAt = context.currentTime;
+  oscillator.type = 'sine';
+  oscillator.frequency.value = 880;
+  gain.gain.setValueAtTime(0.0001, startAt);
+  gain.gain.exponentialRampToValueAtTime(0.12, startAt + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.32);
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start(startAt);
+  oscillator.stop(startAt + 0.34);
+  oscillator.onended = () => {
+    oscillator.disconnect();
+    gain.disconnect();
+  };
+}
+
 export function DeliveryModule() {
   const { selectedEstablishment } = useApp();
   const { user } = useAuth();
@@ -72,6 +93,9 @@ export function DeliveryModule() {
   const [newOrderOpen, setNewOrderOpen] = useState(false);
   const [newOrderPaymentOpen, setNewOrderPaymentOpen] = useState(false);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  const [cancellationOrder, setCancellationOrder] = useState<MenuOrder | null>(null);
+  const [cancellationReason, setCancellationReason] = useState('');
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [paymentOrder, setPaymentOrder] = useState<MenuOrder | null>(null);
   const [orderType, setOrderType] = useState<'delivery' | 'pickup'>('delivery');
   const [customerName, setCustomerName] = useState('');
@@ -90,6 +114,8 @@ export function DeliveryModule() {
   const latestOrders = useRef(orders);
   latestOrders.current = orders;
   const remoteNotificationsReady = useRef(false);
+  const orderAudioContext = useRef<AudioContext | null>(null);
+  const [orderSoundEnabled, setOrderSoundEnabled] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(
     typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
   );
@@ -206,6 +232,13 @@ export function DeliveryModule() {
 
     for (const order of newOrders) {
       toast.info(`Novo pedido recebido${order.customerName ? ` de ${order.customerName}` : ''}`);
+      if (orderSoundEnabled && orderAudioContext.current) {
+        const context = orderAudioContext.current;
+        void context.resume().then(() => playOrderAlert(context)).catch(() => {
+          setOrderSoundEnabled(false);
+          toast.info('O som foi pausado pelo navegador. Ative novamente para ouvir novos pedidos.');
+        });
+      }
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         try {
           new Notification('Novo pedido no Delivery', {
@@ -232,7 +265,13 @@ export function DeliveryModule() {
     if (publicOrderEvents.length) {
       setRegister((current) => publicOrderEvents.reduce((updated, event) => appendAuditEvent(updated, event), current));
     }
-  }, [orders, setRegister]);
+  }, [orderSoundEnabled, orders, setRegister]);
+
+  useEffect(() => () => {
+    const context = orderAudioContext.current;
+    orderAudioContext.current = null;
+    if (context && context.state !== 'closed') void context.close();
+  }, []);
 
   if (!selectedEstablishment) return null;
 
@@ -243,7 +282,7 @@ export function DeliveryModule() {
   const subtotal = Math.round(cart.reduce((sum, item) => sum + item.price * item.quantity, 0) * 100) / 100;
   const fee = deliveryFee;
   const editingOrder = orders.find((order) => order.id === editingOrderId);
-  const canEditOrderContents = !editingOrder || (editingOrder.status !== 'paid' && !editingOrder.cashSaleId);
+  const canEditOrderContents = !editingOrder || (editingOrder.status !== 'paid' && !editingOrder.cashSaleId && editingOrder.deliveryStatus !== 'cancelled');
   const inProduction = deliveryOrders.filter((order) => (order.deliveryStatus ?? 'production') === 'production').length;
   const dispatched = deliveryOrders.filter((order) => order.deliveryStatus === 'dispatched').length;
 
@@ -396,6 +435,7 @@ export function DeliveryModule() {
   };
 
   const openEditOrder = (order: MenuOrder) => {
+    if (order.deliveryStatus === 'cancelled') return;
     setEditingOrderId(order.id);
     setOrderType(order.orderType ?? 'delivery');
     setCustomerName(order.customerName ?? '');
@@ -410,6 +450,10 @@ export function DeliveryModule() {
 
   const dispatchOrder = (order: MenuOrder) => {
     if ((order.deliveryStatus ?? 'production') !== 'production') return;
+    if (order.orderType !== 'pickup' && !drivers.some((driver) => driver.id === order.driverId && driver.active)) {
+      toast.error('Selecione um entregador ativo antes de despachar o pedido.');
+      return;
+    }
     setOrders((current) => current.map((entry) => entry.id === order.id
       ? { ...entry, deliveryStatus: 'dispatched' }
       : entry));
@@ -422,6 +466,33 @@ export function DeliveryModule() {
     });
     setRegister((current) => appendAuditEvent(current, event));
     toast.success(order.orderType === 'pickup' ? 'Pedido pronto para retirada' : 'Pedido despachado para entrega');
+  };
+
+  const confirmCancelOrder = () => {
+    const reason = cancellationReason.trim();
+    if (!cancellationOrder || !reason) {
+      toast.error('Informe o motivo do cancelamento.');
+      return;
+    }
+    if (cancellationOrder.status === 'paid' || cancellationOrder.cashSaleId) {
+      toast.error('Não é possível cancelar um pedido já registrado no caixa.');
+      return;
+    }
+    const cancelledAt = new Date().toISOString();
+    setOrders((current) => current.map((order) => order.id === cancellationOrder.id
+      ? { ...order, deliveryStatus: 'cancelled', cancelledAt, cancellationReason: reason }
+      : order));
+    const event = createAuditEvent(user, {
+      entityType: 'order',
+      entityId: cancellationOrder.id,
+      action: 'status_changed',
+      occurredAt: cancelledAt,
+      summary: `Pedido cancelado. Motivo: ${reason}`,
+    });
+    setRegister((current) => appendAuditEvent(current, event));
+    setCancellationOrder(null);
+    setCancellationReason('');
+    toast.success('Pedido cancelado.');
   };
 
   const openPaymentDialog = (order: MenuOrder) => {
@@ -538,6 +609,25 @@ export function DeliveryModule() {
     }
   };
 
+  const enableOrderSound = async () => {
+    const AudioContextConstructor = window.AudioContext
+      ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) {
+      toast.error('Este navegador não oferece avisos sonoros.');
+      return;
+    }
+    try {
+      const context = orderAudioContext.current ?? new AudioContextConstructor();
+      orderAudioContext.current = context;
+      await context.resume();
+      playOrderAlert(context);
+      setOrderSoundEnabled(true);
+      toast.success('Aviso sonoro ativado para novos pedidos.');
+    } catch (reason) {
+      toast.error(reason instanceof Error ? reason.message : 'Não foi possível ativar o som dos pedidos.');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -558,11 +648,20 @@ export function DeliveryModule() {
         <div>
           <h2 className="flex items-center gap-2 font-semibold"><Bell className="h-4 w-4" />Avisos de novos pedidos</h2>
           <p className="text-sm text-muted-foreground">
-            Os avisos aparecem nesta tela enquanto o Delivery estiver aberto.
+            Os avisos aparecem nesta tela enquanto o Delivery estiver aberto. Ative o som para ouvir um alerta a cada novo pedido.
             {notificationPermission === 'granted' && ' Notificações do navegador estão ativadas.'}
             {notificationPermission === 'denied' && ' O navegador bloqueou notificações; altere essa permissão nas configurações.'}
           </p>
         </div>
+        <Button
+          type="button"
+          variant={orderSoundEnabled ? 'secondary' : 'outline'}
+          aria-pressed={orderSoundEnabled}
+          onClick={() => orderSoundEnabled ? setOrderSoundEnabled(false) : void enableOrderSound()}
+        >
+          {orderSoundEnabled ? <Volume2 className="mr-2 h-4 w-4" /> : <VolumeX className="mr-2 h-4 w-4" />}
+          {orderSoundEnabled ? 'Desativar som' : 'Ativar som dos pedidos'}
+        </Button>
         {notificationPermission !== 'granted' && notificationPermission !== 'unsupported' && (
           <Button type="button" variant="outline" onClick={() => void enableBrowserNotifications()}>
             Ativar notificações do navegador
@@ -582,6 +681,7 @@ export function DeliveryModule() {
             const statusInfo = STATUS_DETAILS[status];
             const isPickup = order.orderType === 'pickup';
             const driver = drivers.find((entry) => entry.id === order.driverId);
+            const hasActiveDriver = drivers.some((entry) => entry.id === order.driverId && entry.active);
             const total = order.total + (order.deliveryFee ?? 0);
             const recordedSale = order.cashSaleId ? register.sales.find((sale) => sale.id === order.cashSaleId) : undefined;
             const recordedPayment = recordedSale?.paymentSplits?.map((split) => {
@@ -592,57 +692,100 @@ export function DeliveryModule() {
               const label = PAYMENT_OPTIONS.find((option) => option.value === split.method)?.label ?? split.method;
               return `${label}: ${formatCurrency(split.amount)}`;
             }).join(' · ');
+            const isExpanded = expandedOrderId === order.id;
+            const canCancel = status !== 'cancelled' && status !== 'finalized' && order.status !== 'paid';
+            const toggleExpanded = () => setExpandedOrderId((current) => current === order.id ? null : order.id);
+            const startCancellation = () => {
+              setCancellationReason('');
+              setCancellationOrder(order);
+            };
             return (
-              <article key={order.id} className="space-y-3 rounded-lg border p-4" style={accentBorderStyle}>
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div><h3 className="font-semibold">{order.customerName || 'Pedido do cardápio'}</h3><p className="text-xs text-muted-foreground">Pedido {order.id.slice(0, 8)} · {new Date(order.createdAt).toLocaleString('pt-BR')}</p></div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline" className={isPickup ? 'border-blue-300 bg-blue-100 text-blue-900' : 'border-violet-300 bg-violet-100 text-violet-900'}>{isPickup ? 'RETIRADA' : 'ENTREGA'}</Badge>
-                    <Badge variant="outline" className={statusInfo.className}>{isPickup && status === 'dispatched' ? 'PRONTO PARA RETIRADA' : statusInfo.label}</Badge>
-                  </div>
+              <article key={order.id} className="overflow-hidden rounded-lg border" style={accentBorderStyle}>
+                <div className="flex items-center gap-2 p-2 sm:p-3">
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-md p-1 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-expanded={isExpanded}
+                    aria-controls={`delivery-order-details-${order.id}`}
+                    onClick={toggleExpanded}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="truncate font-semibold">{order.customerName || 'Pedido do cardápio'}</span>
+                        <Badge variant="outline" className={`px-2 py-0.5 text-xs font-semibold ${isPickup ? 'border-blue-300 bg-blue-100 text-blue-900' : 'border-violet-300 bg-violet-100 text-violet-900'}`}>{isPickup ? 'RETIRADA' : 'ENTREGA'}</Badge>
+                        <Badge variant="outline" className={`px-2 py-0.5 text-xs font-semibold ${statusInfo.className}`}>{isPickup && status === 'dispatched' ? 'PRONTO PARA RETIRADA' : statusInfo.label}</Badge>
+                      </span>
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">Pedido {order.id.slice(0, 8)} · {new Date(order.createdAt).toLocaleString('pt-BR')}{driver ? ` · ${driver.name}` : ''}</span>
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <span className="whitespace-nowrap text-sm font-semibold">{formatCurrency(total)}</span>
+                      <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                    </span>
+                  </button>
+                  {!isPickup && status === 'production' && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      title={hasActiveDriver ? 'Despachar pedido' : 'Abra os detalhes e selecione um entregador'}
+                      aria-label={`Despachar pedido de ${order.customerName || 'cliente'}`}
+                      disabled={!hasActiveDriver}
+                      onClick={() => dispatchOrder(order)}
+                    >
+                      <Truck className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
-                <div className="grid gap-2 text-sm sm:grid-cols-2">
-                  {isPickup
-                    ? <p className="font-semibold text-blue-800">Cliente irá retirar no estabelecimento</p>
-                    : <p><span className="font-medium">Endereço de entrega:</span> {order.address || 'Não informado'}</p>}
-                  {!isPickup && order.postalCode && <p><span className="font-medium">CEP:</span> {formatPostalCode(order.postalCode)}</p>}
-                  <p><span className="font-medium">Telefone:</span> {order.phone || 'Não informado'}</p>
-                  <p><span className="font-medium">CPF/CNPJ:</span> {order.document || 'Não informado'}</p>
-                  <p><span className="font-medium">Pagamento:</span> {recordedPayment || plannedPayment || PAYMENT_OPTIONS.find((option) => option.value === order.paymentMethod)?.label || 'Não informado'}</p>
-                </div>
-                <div className="rounded-md bg-muted/40 p-3 text-sm">
-                  {order.items.map((item, index) => <div key={`${order.id}-${index}`} className="flex justify-between gap-2"><span>{item.quantity}× {item.name}</span><span>{formatCurrency(item.price * item.quantity)}</span></div>)}
-                  {!isPickup && <div className="mt-2 flex justify-between border-t pt-2 text-muted-foreground"><span>Taxa de entrega</span><span>{formatCurrency(order.deliveryFee ?? 0)}</span></div>}
-                  <div className="mt-1 flex justify-between font-bold"><span>Total</span><span>{formatCurrency(total)}</span></div>
-                </div>
-                <div className="flex justify-end">
-                  <Button type="button" variant="outline" size="sm" onClick={() => {
-                    try {
-                      printDeliveryOrder(order, selectedEstablishment?.name ?? 'Pedido', driver?.name);
-                    } catch (reason) {
-                      toast.error(reason instanceof Error ? reason.message : 'Não foi possível imprimir o pedido.');
-                    }
-                  }}><Printer className="mr-2 h-4 w-4" />Imprimir pedido</Button>
-                  <Button type="button" variant="outline" size="sm" onClick={() => openEditOrder(order)}><Pencil className="mr-2 h-4 w-4" />Editar pedido</Button>
-                </div>
-                {status !== 'finalized' && (
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    {status === 'production' && !isPickup ? (
-                      <label className="flex min-w-48 flex-1 items-center gap-2 text-sm">
+                {isExpanded && (
+                  <div id={`delivery-order-details-${order.id}`} className="space-y-3 border-t p-3 sm:p-4">
+                    <div className="grid gap-2 text-sm sm:grid-cols-2">
+                      {isPickup
+                        ? <p className="font-semibold text-blue-800">Cliente irá retirar no estabelecimento</p>
+                        : <p><span className="font-medium">Endereço de entrega:</span> {order.address || 'Não informado'}</p>}
+                      {!isPickup && order.postalCode && <p><span className="font-medium">CEP:</span> {formatPostalCode(order.postalCode)}</p>}
+                      <p><span className="font-medium">Telefone:</span> {order.phone || 'Não informado'}</p>
+                      <p><span className="font-medium">CPF/CNPJ:</span> {order.document || 'Não informado'}</p>
+                      <p><span className="font-medium">Pagamento:</span> {recordedPayment || plannedPayment || PAYMENT_OPTIONS.find((option) => option.value === order.paymentMethod)?.label || 'Não informado'}</p>
+                    </div>
+                    <div className="rounded-md bg-muted/40 p-3 text-sm">
+                      {order.items.map((item, index) => <div key={`${order.id}-${index}`} className="flex justify-between gap-2"><span>{item.quantity}× {item.name}</span><span>{formatCurrency(item.price * item.quantity)}</span></div>)}
+                      {!isPickup && <div className="mt-2 flex justify-between border-t pt-2 text-muted-foreground"><span>Taxa de entrega</span><span>{formatCurrency(order.deliveryFee ?? 0)}</span></div>}
+                      <div className="mt-1 flex justify-between font-bold"><span>Total</span><span>{formatCurrency(total)}</span></div>
+                    </div>
+                    {status !== 'finalized' && status !== 'cancelled' && !isPickup && (
+                      <label className="flex min-w-48 items-center gap-2 text-sm">
                         <UserRound className="h-4 w-4 text-muted-foreground" />
+                        <span className="shrink-0 font-medium">Entregador</span>
                         <select value={order.driverId ?? ''} onChange={(event) => updateOrderDriver(order.id, event.target.value)} className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-2">
-                          <option value="">Sem entregador</option>
-                          {drivers.filter((entry) => entry.active).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+                          <option value="">Selecione entregador</option>
+                          {drivers.filter((entry) => entry.active || entry.id === order.driverId).map((entry) => <option key={entry.id} value={entry.id} disabled={!entry.active}>{entry.name}{entry.active ? '' : ' (inativo)'}</option>)}
                         </select>
                       </label>
-                    ) : status === 'production' ? <p className="text-sm text-muted-foreground">Pedido para retirada no estabelecimento</p>
-                      : !isPickup ? <p className="text-sm text-muted-foreground">{driver ? `Entregador: ${driver.name}` : 'Entregador não informado'}</p> : null}
-                    {status === 'production'
-                      ? <Button type="button" onClick={() => dispatchOrder(order)}>{isPickup ? <Check className="mr-2 h-4 w-4" /> : <Truck className="mr-2 h-4 w-4" />}{isPickup ? 'Marcar pronto para retirada' : 'Despachar'}</Button>
-                      : <Button type="button" onClick={() => openPaymentDialog(order)}><Check className="mr-2 h-4 w-4" />Finalizar pagamento</Button>}
+                    )}
+                    {status === 'cancelled' && <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-900">Motivo do cancelamento: {order.cancellationReason || 'Não informado'}</p>}
+                    {status === 'finalized' && <p className="flex items-center gap-2 text-sm text-muted-foreground"><Clock3 className="h-4 w-4" />Pagamento registrado no caixa.</p>}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+                      <div className="flex flex-wrap gap-2">
+                        {canCancel && (
+                          <>
+                            <Button type="button" variant="ghost" size="icon" title="Editar pedido" aria-label={`Editar pedido de ${order.customerName || 'cliente'}`} onClick={() => openEditOrder(order)}><Pencil className="h-4 w-4" /></Button>
+                            <Button type="button" variant="ghost" size="icon" title="Cancelar pedido" aria-label={`Cancelar pedido de ${order.customerName || 'cliente'}`} onClick={startCancellation}><Ban className="h-4 w-4 text-destructive" /></Button>
+                          </>
+                        )}
+                        {status === 'production' && !isPickup && <Button type="button" variant="ghost" size="icon" title="Despachar pedido" aria-label={`Despachar pedido de ${order.customerName || 'cliente'}`} disabled={!hasActiveDriver} onClick={() => dispatchOrder(order)}><Truck className="h-4 w-4" /></Button>}
+                        {status === 'production' && isPickup && <Button type="button" variant="ghost" size="icon" title="Marcar pronto para retirada" aria-label="Marcar pedido pronto para retirada" onClick={() => dispatchOrder(order)}><Check className="h-4 w-4" /></Button>}
+                        {status === 'dispatched' && <Button type="button" variant="ghost" size="icon" title="Finalizar pagamento" aria-label="Finalizar pagamento" onClick={() => openPaymentDialog(order)}><Check className="h-4 w-4" /></Button>}
+                      </div>
+                      <Button type="button" variant="outline" size="icon" title="Imprimir pedido" aria-label={`Imprimir pedido de ${order.customerName || 'cliente'}`} onClick={() => {
+                        try {
+                          printDeliveryOrder(order, selectedEstablishment?.name ?? 'Pedido', driver?.name);
+                        } catch (reason) {
+                          toast.error(reason instanceof Error ? reason.message : 'Não foi possível imprimir o pedido.');
+                        }
+                      }}><Printer className="h-4 w-4" /></Button>
+                    </div>
                   </div>
                 )}
-                {status === 'finalized' && <p className="flex items-center gap-2 text-sm text-muted-foreground"><Clock3 className="h-4 w-4" />Pagamento registrado no caixa.</p>}
               </article>
             );
           })}
@@ -718,6 +861,36 @@ export function DeliveryModule() {
               <Button type="button" onClick={createOrder}>{editingOrder ? 'Salvar alterações' : 'Salvar pedido'}</Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(cancellationOrder)} onOpenChange={(open) => {
+        if (!open) {
+          setCancellationOrder(null);
+          setCancellationReason('');
+        }
+      }}>
+        <DialogContent className="max-w-lg" style={accentBorderStyle}>
+          <DialogHeader>
+            <DialogTitle>Cancelar pedido</DialogTitle>
+            <DialogDescription>Informe o motivo. O pedido ficará marcado como cancelado no histórico e no acompanhamento do cliente.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label htmlFor="delivery-cancellation-reason" className="text-sm font-medium">Motivo do cancelamento</label>
+            <Textarea
+              id="delivery-cancellation-reason"
+              value={cancellationReason}
+              onChange={(event) => setCancellationReason(event.target.value)}
+              placeholder="Descreva por que este pedido está sendo cancelado"
+              maxLength={500}
+              required
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCancellationOrder(null)}>Voltar</Button>
+            <Button type="button" variant="destructive" onClick={confirmCancelOrder} disabled={!cancellationReason.trim()}>
+              <Ban className="mr-2 h-4 w-4" />Confirmar cancelamento
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
       <PaymentDialog

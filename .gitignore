@@ -1,2 +1,5 @@
 node_modules
 npm run dev
+.env
+.env.*
+!.env.example

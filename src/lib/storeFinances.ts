@@ -194,7 +194,7 @@ export function ensureCurrentStoreRecurringBills(
     : updated;
 }
 
-export type BillAlert = 'paid' | 'overdue' | 'due-soon' | 'upcoming' | 'expired' | 'none';
+export type BillAlert = 'paid' | 'overdue' | 'due-today' | 'due-soon' | 'upcoming' | 'expired' | 'none';
 export type CustomerBillStatus = 'paid' | 'overdue' | 'expired' | 'pending';
 
 export function getBillAlert(bill: FinanceBill, referenceDate: Date): BillAlert {
@@ -212,7 +212,8 @@ export function getBillAlert(bill: FinanceBill, referenceDate: Date): BillAlert 
   const todayTimestamp = Date.UTC(todayParts[0], todayParts[1] - 1, todayParts[2]);
   const daysUntilDue = Math.round((dueTimestamp - todayTimestamp) / 86_400_000);
   if (daysUntilDue < 0) return 'overdue';
-  if (daysUntilDue <= 7) return 'due-soon';
+  if (daysUntilDue === 0) return 'due-today';
+  if (daysUntilDue < 7) return 'due-soon';
   return 'upcoming';
 }
 

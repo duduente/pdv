@@ -210,7 +210,7 @@ describe('finanças da loja', () => {
     });
   });
 
-  it('shows paid, overdue, due soon, expired and upcoming bill states', () => {
+  it('shows paid, overdue, due today, due soon, expired and upcoming bill states', () => {
     const today = new Date(2026, 10, 9);
     const bill = (dueDate: string, overrides: Partial<FinanceBill> = {}): FinanceBill => ({
       id: 'bill',
@@ -223,8 +223,11 @@ describe('finanças da loja', () => {
     });
 
     expect(getBillAlert(bill('2026-11-08'), today)).toBe('overdue');
+    expect(getBillAlert(bill('2026-11-09'), today)).toBe('due-today');
     expect(getBillAlert(bill('2026-11-10'), today)).toBe('due-soon');
-    expect(getBillAlert(bill('2026-12-10'), today)).toBe('upcoming');
+    expect(getBillAlert(bill('2026-11-15'), today)).toBe('due-soon');
+    expect(getBillAlert(bill('2026-11-16'), today)).toBe('upcoming');
+    expect(getBillAlert(bill('2026-11-17'), today)).toBe('upcoming');
     expect(getBillAlert(bill('2026-11-30', { validUntil: '2026-11-08' }), today)).toBe('expired');
     expect(getBillAlert(bill('2026-11-08', { paidAt: '2026-11-08T12:00:00.000Z' }), today)).toBe('paid');
     expect(getCustomerBillStatus(bill('2026-11-08'), today)).toBe('overdue');

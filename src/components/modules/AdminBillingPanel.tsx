@@ -8,8 +8,9 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { CurrencyInput } from '@/components/ui/currency-input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { cn } from '@/lib/utils';
 import { ensureAdminMonthlyBill, loadAdminBilling, saveAdminBilling } from '@/lib/adminBilling';
-import { EMPTY_STORE_FINANCES, getBillAlert, type FinanceBill, type StoreFinances } from '@/lib/storeFinances';
+import { EMPTY_STORE_FINANCES, getBillAlert, type BillAlert, type FinanceBill, type StoreFinances } from '@/lib/storeFinances';
 import { toast } from 'sonner';
 import { useAuth } from '@/auth/AuthContext';
 
@@ -25,11 +26,32 @@ function todayKey() {
 const BILL_LABELS = {
   paid: 'Paga',
   overdue: 'Vencida',
-  'due-soon': 'Vence em até 7 dias',
-  upcoming: 'A vencer',
+  'due-today': 'Vence hoje',
+  'due-soon': 'Vence em menos de 7 dias',
+  upcoming: 'Vence em 7 dias ou mais',
   expired: 'Boleto expirado',
   none: 'Sem vencimento',
 } as const;
+
+const BILL_ALERT_STYLES: Record<BillAlert, string> = {
+  paid: 'border-emerald-300 bg-emerald-50 text-emerald-800',
+  overdue: 'border-red-300 bg-red-50 text-red-800',
+  'due-today': 'border-orange-300 bg-orange-50 text-orange-900',
+  'due-soon': 'border-yellow-300 bg-yellow-50 text-yellow-900',
+  upcoming: 'border-slate-300 bg-slate-100 text-slate-700',
+  expired: 'border-red-300 bg-red-50 text-red-800',
+  none: 'border-slate-300 bg-slate-100 text-slate-700',
+};
+
+const BILL_DUE_DATE_STYLES: Record<BillAlert, string> = {
+  paid: 'text-emerald-800',
+  overdue: 'text-red-800',
+  'due-today': 'text-orange-900',
+  'due-soon': 'text-yellow-900',
+  upcoming: 'text-slate-700',
+  expired: 'text-red-800',
+  none: 'text-muted-foreground',
+};
 
 export function AdminBillingPanel({
   establishments,
@@ -62,7 +84,7 @@ export function AdminBillingPanel({
   const [billDraft, setBillDraft] = useState<Pick<FinanceBill, 'description' | 'amount' | 'dueDate' | 'boletoCode' | 'pixCode' | 'paymentType' | 'validUntil'> | null>(null);
 
   const selectedEstablishment = establishments.find((establishment) => establishment.id === establishmentId);
-  const attentionBills = billing.bills.filter((bill) => ['overdue', 'due-soon', 'expired'].includes(getBillAlert(bill, new Date())));
+  const attentionBills = billing.bills.filter((bill) => ['overdue', 'due-today', 'due-soon', 'expired'].includes(getBillAlert(bill, new Date())));
 
   useEffect(() => {
     if (!establishments.some((establishment) => establishment.id === establishmentId)) {
@@ -389,13 +411,14 @@ export function AdminBillingPanel({
                       <div>
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="font-semibold">{bill.description}</h3>
-                          <Badge variant={status === 'paid' ? 'secondary' : status === 'overdue' || status === 'expired' ? 'destructive' : 'outline'}>
+                          <Badge variant="outline" className={BILL_ALERT_STYLES[status]}>
                             {status === 'overdue' || status === 'expired' ? <AlertTriangle className="mr-1 h-3 w-3" /> : null}
                             {BILL_LABELS[status]}
                           </Badge>
                           {bill.recurringMonth && <Badge variant="outline">Mensalidade Kito · {new Date(`${bill.recurringMonth}-01T00:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</Badge>}
                         </div>
-                        <p className="mt-1 text-sm text-muted-foreground">Vencimento: {new Date(`${bill.dueDate}T00:00:00`).toLocaleDateString('pt-BR')} · {formatCurrency(bill.amount)}</p>
+                        <p className={cn('mt-1 text-base font-semibold', BILL_DUE_DATE_STYLES[status])}>Vencimento: {new Date(`${bill.dueDate}T00:00:00`).toLocaleDateString('pt-BR')}</p>
+                        <p className="text-sm text-muted-foreground">{formatCurrency(bill.amount)}</p>
                         {bill.boletoCode && bill.paymentType !== 'pix' && <p className="break-all text-sm text-muted-foreground">Código do boleto: {bill.boletoCode}</p>}
                         {bill.pixCode && <p className="break-all text-sm text-muted-foreground">Chave ou código Pix: {bill.pixCode}</p>}
                         {bill.paymentType === 'pix' && !bill.pixCode && bill.boletoCode && <p className="break-all text-sm text-muted-foreground">Chave ou código Pix: {bill.boletoCode}</p>}

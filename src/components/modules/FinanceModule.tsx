@@ -12,9 +12,10 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { CurrencyInput } from '@/components/ui/currency-input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { cn } from '@/lib/utils';
 import {
   ensureCurrentStoreRecurringBills, EMPTY_STORE_FINANCES, getBillAlert, getBillPaymentOptions,
-  getCustomerBillStatus, type CustomerBillStatus, type FinanceBill,
+  getCustomerBillStatus, type BillAlert, type CustomerBillStatus, type FinanceBill,
 } from '@/lib/storeFinances';
 import { loadAdminBilling } from '@/lib/adminBilling';
 import { getPeriodRange, type ReportPeriod } from '@/lib/criticalFlows';
@@ -54,11 +55,32 @@ function createId() {
 const ALERT_LABELS = {
   paid: 'Pago',
   overdue: 'Vencido',
-  'due-soon': 'Vence em até 7 dias',
-  upcoming: 'A vencer',
+  'due-today': 'Vence hoje',
+  'due-soon': 'Vence em menos de 7 dias',
+  upcoming: 'Vence em 7 dias ou mais',
   expired: 'Boleto expirado',
   none: 'Sem vencimento',
 } as const;
+
+const ALERT_BADGE_CLASSES: Record<BillAlert, string> = {
+  paid: 'border-emerald-300 bg-emerald-50 text-emerald-800',
+  overdue: 'border-red-300 bg-red-50 text-red-800',
+  'due-today': 'border-orange-300 bg-orange-50 text-orange-900',
+  'due-soon': 'border-yellow-300 bg-yellow-50 text-yellow-900',
+  upcoming: 'border-slate-300 bg-slate-100 text-slate-700',
+  expired: 'border-red-300 bg-red-50 text-red-800',
+  none: 'border-slate-300 bg-slate-100 text-slate-700',
+};
+
+const DUE_DATE_CLASSES: Record<BillAlert, string> = {
+  paid: 'text-emerald-800',
+  overdue: 'text-red-800',
+  'due-today': 'text-orange-900',
+  'due-soon': 'text-yellow-900',
+  upcoming: 'text-slate-700',
+  expired: 'text-red-800',
+  none: 'text-muted-foreground',
+};
 
 export function FinanceModule() {
   const { selectedEstablishment } = useApp();
@@ -156,7 +178,7 @@ export function FinanceModule() {
 
   const today = new Date();
   const sortedBills = [...finances.bills].sort((first, second) => first.dueDate.localeCompare(second.dueDate));
-  const unpaidAlerts = sortedBills.filter((bill) => ['overdue', 'due-soon', 'expired'].includes(getBillAlert(bill, today)));
+  const unpaidAlerts = sortedBills.filter((bill) => ['overdue', 'due-today', 'due-soon', 'expired'].includes(getBillAlert(bill, today)));
   const storeUnpaidTotal = finances.bills
     .filter((bill) => !bill.paidAt)
     .reduce((sum, bill) => sum + bill.amount, 0);
@@ -295,7 +317,7 @@ export function FinanceModule() {
               <Bell className="mt-0.5 h-5 w-5 shrink-0" />
               <div>
                 <p className="font-semibold">{unpaidAlerts.length} conta(s) precisam de atenção</p>
-                <p className="text-sm">{unpaidAlerts.filter((bill) => getBillAlert(bill, today) === 'overdue').length} vencida(s) · {unpaidAlerts.filter((bill) => getBillAlert(bill, today) === 'due-soon').length} vencem nos próximos 7 dias · {unpaidAlerts.filter((bill) => getBillAlert(bill, today) === 'expired').length} boleto(s) expirado(s).</p>
+                <p className="text-sm">{unpaidAlerts.filter((bill) => getBillAlert(bill, today) === 'overdue').length} vencida(s) · {unpaidAlerts.filter((bill) => getBillAlert(bill, today) === 'due-today').length} vencem hoje · {unpaidAlerts.filter((bill) => getBillAlert(bill, today) === 'due-soon').length} vencem em menos de 7 dias · {unpaidAlerts.filter((bill) => getBillAlert(bill, today) === 'expired').length} boleto(s) expirado(s).</p>
               </div>
             </Card>
           )}
@@ -343,14 +365,15 @@ export function FinanceModule() {
               <Card key={bill.id} className="space-y-2 p-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="font-semibold">{bill.description}</h3>
-                  <Badge variant={alert === 'paid' ? 'secondary' : alert === 'overdue' || alert === 'expired' ? 'destructive' : 'outline'}>
+                  <Badge variant="outline" className={ALERT_BADGE_CLASSES[alert]}>
                     {alert === 'overdue' || alert === 'expired' ? <AlertTriangle className="mr-1 h-3 w-3" /> : null}
-                    {CUSTOMER_BILL_STATUS_LABELS[billStatus]}
+                    {billStatus === 'pending' ? ALERT_LABELS[alert] : CUSTOMER_BILL_STATUS_LABELS[billStatus]}
                   </Badge>
                   {bill.recurringMonth && <Badge variant="outline">Mensalidade · {formatBillMonth(bill.recurringMonth)}</Badge>}
                   {paymentOptions.length === 0 && <Badge variant="outline">{bill.paymentType === 'pix' ? 'Pix' : 'Boleto'}</Badge>}
                 </div>
-                <p className="text-sm text-muted-foreground">Vencimento: {new Date(`${bill.dueDate}T00:00:00`).toLocaleDateString('pt-BR')} · Valor: {formatCurrency(bill.amount)}</p>
+                <p className={cn('text-base font-semibold', DUE_DATE_CLASSES[alert])}>Vencimento: {new Date(`${bill.dueDate}T00:00:00`).toLocaleDateString('pt-BR')}</p>
+                <p className="text-sm text-muted-foreground">Valor: {formatCurrency(bill.amount)}</p>
                 {bill.paidAt && <p className="text-sm font-medium text-emerald-700">Pagamento confirmado pelo Kito em {new Date(bill.paidAt).toLocaleDateString('pt-BR')}.</p>}
                 {!bill.paidAt && paymentOptions.length > 1 && (
                   <div className="space-y-2">
@@ -442,14 +465,15 @@ export function FinanceModule() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-semibold">{bill.description}</h3>
-                      <Badge variant={alert === 'paid' ? 'secondary' : alert === 'overdue' || alert === 'expired' ? 'destructive' : alert === 'due-soon' ? 'outline' : 'secondary'}>
+                      <Badge variant="outline" className={ALERT_BADGE_CLASSES[alert]}>
                         {alert === 'overdue' || alert === 'expired' ? <AlertTriangle className="mr-1 h-3 w-3" /> : null}
                         {ALERT_LABELS[alert]}
                       </Badge>
                       {bill.paymentType && <Badge variant="outline">{bill.paymentType === 'pix' ? 'Pix' : 'Boleto'}</Badge>}
                       {bill.isRecurring && <Badge variant="outline">Mensal</Badge>}
                     </div>
-                    <p className="mt-1 text-sm text-muted-foreground">Vencimento: {new Date(`${bill.dueDate}T00:00:00`).toLocaleDateString('pt-BR')} · Valor: {formatCurrency(bill.amount)}</p>
+                    <p className={cn('mt-1 text-base font-semibold', DUE_DATE_CLASSES[alert])}>Vencimento: {new Date(`${bill.dueDate}T00:00:00`).toLocaleDateString('pt-BR')}</p>
+                    <p className="text-sm text-muted-foreground">Valor: {formatCurrency(bill.amount)}</p>
                     {bill.boletoCode && <p className="break-all text-sm text-muted-foreground">{bill.paymentType === 'pix' ? 'Chave ou código Pix' : 'Código do boleto'}: {bill.boletoCode}</p>}
                     {bill.validUntil && <p className="text-sm text-muted-foreground">Validade: {new Date(`${bill.validUntil}T00:00:00`).toLocaleDateString('pt-BR')}</p>}
                   </div>

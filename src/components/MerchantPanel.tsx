@@ -19,6 +19,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { AppointmentModule } from './modules/AppointmentModule';
 import { MenuModule } from './modules/MenuModule';
@@ -501,6 +502,9 @@ export function MerchantPanel() {
   }
 
   function SettingsView() {
+    const canEditIdentity = hasStorePermission(user, est.id, 'store-settings');
+    const canConfigureDelivery = est.modules.delivery && hasStorePermission(user, est.id, 'delivery');
+    const canManageTeam = hasStorePermission(user, est.id, 'manage-users');
     const [name, setName] = useState(est.theme.name);
     const [accent, setAccent] = useState(est.theme.accentColor);
     const [logo, setLogo] = useState(est.theme.logo);
@@ -557,71 +561,83 @@ export function MerchantPanel() {
     };
 
     return (
-      <div className="space-y-6 max-w-2xl">
+      <div className="max-w-2xl space-y-6">
         <div>
           <h1 className="text-2xl font-bold">Configurações da loja</h1>
           <p className="text-muted-foreground">Identidade, delivery e acessos da equipe.</p>
         </div>
 
-        {hasStorePermission(user, est.id, 'store-settings') && <Card className="p-6 space-y-5">
-          <div className="space-y-1.5">
-            <Label htmlFor="est-name">Nome do Estabelecimento</Label>
-            <Input id="est-name" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
+        <Tabs defaultValue={canEditIdentity ? 'store' : canConfigureDelivery ? 'delivery' : 'team'} className="space-y-4">
+          <TabsList className="h-auto w-full flex-wrap justify-start">
+            {canEditIdentity && <TabsTrigger value="store">Loja</TabsTrigger>}
+            {canConfigureDelivery && <TabsTrigger value="delivery">Delivery</TabsTrigger>}
+            {canManageTeam && <TabsTrigger value="team">Equipe</TabsTrigger>}
+          </TabsList>
 
-          <div className="space-y-1.5">
-            <Label>Logo / Avatar</Label>
-            <div className="flex items-center gap-4">
-              <div
-                className="flex h-16 w-16 items-center justify-center rounded-xl text-white text-2xl font-bold"
-                style={{ backgroundColor: accent }}
-              >
-                {logo ? <img src={logo} alt={`Prévia da foto de ${name}`} className="h-full w-full rounded-xl object-cover" /> : name.charAt(0) || '?'}
+          {canEditIdentity && <TabsContent value="store" className="mt-0">
+            <Card className="space-y-5 p-6">
+              <div className="space-y-1.5">
+                <Label htmlFor="est-name">Nome do Estabelecimento</Label>
+                <Input id="est-name" value={name} onChange={(e) => setName(e.target.value)} />
               </div>
-              <input ref={logoInputRef} type="file" accept="image/*" className="sr-only" onChange={(event) => void chooseLogo(event.target.files?.[0])} />
-              <Button type="button" variant="outline" size="sm" disabled={uploadingLogo} onClick={() => logoInputRef.current?.click()}>
-                <Upload className="h-4 w-4 mr-2" />
-                {uploadingLogo ? 'Carregando...' : 'Escolher foto'}
-              </Button>
-            </div>
-          </div>
 
-          <div className="space-y-2">
-            <Label>Cor de Destque da Marca</Label>
-            <div className="flex flex-wrap gap-3">
-              {colorOptions.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setAccent(c)}
-                  className={cn(
-                    'h-10 w-10 rounded-lg border-2 transition-all',
-                    accent === c ? 'border-foreground scale-110' : 'border-transparent'
-                  )}
-                  style={{ backgroundColor: c }}
-                >
-                  {accent === c && <Check className="h-4 w-4 text-white mx-auto" />}
-                </button>
-              ))}
-            </div>
-          </div>
+              <div className="space-y-1.5">
+                <Label>Logo / Avatar</Label>
+                <div className="flex items-center gap-4">
+                  <div
+                    className="flex h-16 w-16 items-center justify-center rounded-xl text-2xl font-bold text-white"
+                    style={{ backgroundColor: accent }}
+                  >
+                    {logo ? <img src={logo} alt={`Prévia da foto de ${name}`} className="h-full w-full rounded-xl object-cover" /> : name.charAt(0) || '?'}
+                  </div>
+                  <input ref={logoInputRef} type="file" accept="image/*" className="sr-only" onChange={(event) => void chooseLogo(event.target.files?.[0])} />
+                  <Button type="button" variant="outline" size="sm" disabled={uploadingLogo} onClick={() => logoInputRef.current?.click()}>
+                    <Upload className="mr-2 h-4 w-4" />
+                    {uploadingLogo ? 'Carregando...' : 'Escolher foto'}
+                  </Button>
+                </div>
+              </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="whatsapp">WhatsApp para Notificações</Label>
-            <Input
-              id="whatsapp"
-              value={whatsapp}
-              onChange={(e) => setWhatsapp(e.target.value)}
-              placeholder="5511999999999"
-            />
-            <p className="text-xs text-muted-foreground">Usado para receber pedidos e avisos de agendamento</p>
-          </div>
+              <div className="space-y-2">
+                <Label>Cor de Destque da Marca</Label>
+                <div className="flex flex-wrap gap-3">
+                  {colorOptions.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setAccent(c)}
+                      className={cn(
+                        'h-10 w-10 rounded-lg border-2 transition-all',
+                        accent === c ? 'border-foreground scale-110' : 'border-transparent'
+                      )}
+                      style={{ backgroundColor: c }}
+                    >
+                      {accent === c && <Check className="mx-auto h-4 w-4 text-white" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-          <Button onClick={saveIdentity}>
-            Salvar alterações
-          </Button>
-        </Card>}
-        {est.modules.delivery && hasStorePermission(user, est.id, 'delivery') && <DeliveryStoreSettings establishmentId={est.id} />}
-        {hasStorePermission(user, est.id, 'manage-users') && <StoreUserManagement establishment={est} />}
+              <div className="space-y-1.5">
+                <Label htmlFor="whatsapp">WhatsApp para Notificações</Label>
+                <Input
+                  id="whatsapp"
+                  value={whatsapp}
+                  onChange={(e) => setWhatsapp(e.target.value)}
+                  placeholder="5511999999999"
+                />
+                <p className="text-xs text-muted-foreground">Usado para receber pedidos e avisos de agendamento</p>
+              </div>
+
+              <Button onClick={saveIdentity}>Salvar alterações</Button>
+            </Card>
+          </TabsContent>}
+          {canConfigureDelivery && <TabsContent value="delivery" className="mt-0">
+            <DeliveryStoreSettings establishmentId={est.id} />
+          </TabsContent>}
+          {canManageTeam && <TabsContent value="team" className="mt-0">
+            <StoreUserManagement establishment={est} />
+          </TabsContent>}
+        </Tabs>
       </div>
     );
   }

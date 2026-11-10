@@ -161,7 +161,7 @@ export function SupportInbox() {
             {!conversations.some((item) => item.humanRequestedAt) && <p className="p-5 text-sm text-muted-foreground">Nenhum pedido de suporte humano no momento.</p>}
           </ScrollArea>
         </div>
-        <div className="flex min-h-[22rem] min-w-0 flex-col">
+        <div className="flex h-[25rem] max-h-[calc(100vh-12rem)] min-h-0 min-w-0 flex-col">
           {selected ? (
             <>
               <div className="flex items-center gap-2 border-b p-4">

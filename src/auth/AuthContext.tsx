@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { useEffect } from 'react';
-import type { Session } from '@supabase/supabase-js';
+import { FunctionsHttpError, type Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import type { AppPermission, StorePermission } from '@/types';
 import { hasStorePermission } from './permissions';
@@ -44,6 +44,21 @@ const DEMO_ADMIN: AppUser = {
   establishmentIds: [],
   isDemo: true,
 };
+
+async function getFunctionErrorMessage(error: Error, fallback: string) {
+  if (error instanceof FunctionsHttpError) {
+    try {
+      const body: unknown = await error.context.clone().json();
+      if (typeof body === 'object' && body !== null) {
+        if ('error' in body && typeof body.error === 'string') return body.error;
+        if ('message' in body && typeof body.message === 'string') return body.message;
+      }
+    } catch {
+      // The response may not contain JSON, so fall back to the SDK error.
+    }
+  }
+  return error.message || fallback;
+}
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const demoModeAvailable = import.meta.env.DEV;
@@ -168,7 +183,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { error } = await supabase.functions.invoke('admin-manage-users', {
         body: { action: 'create', ...input, username },
       });
-      if (error) throw new Error(error.message || 'Não foi possível criar o usuário.');
+      if (error) throw new Error(await getFunctionErrorMessage(error, 'Não foi possível criar o usuário.'));
       return;
     }
     if (!demoModeAvailable) throw new Error('Gestão local de usuários só está disponível na demonstração.');
@@ -194,7 +209,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (user?.role !== 'super-admin') return [];
     if (supabase && !user.isDemo) {
       const { data, error } = await supabase.functions.invoke('admin-manage-users', { body: { action: 'list' } });
-      if (error) throw new Error(error.message || 'Não foi possível listar os usuários.');
+      if (error) throw new Error(await getFunctionErrorMessage(error, 'Não foi possível listar os usuários.'));
       return data.users as AppUser[];
     }
     return readUsers().map((candidate) => {
@@ -208,7 +223,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (user?.role !== 'super-admin') throw new Error('Apenas o Super Admin pode remover usuários.');
     if (supabase && !user.isDemo) {
       const { error } = await supabase.functions.invoke('admin-manage-users', { body: { action: 'delete', userId: id } });
-      if (error) throw new Error(error.message || 'Não foi possível remover o usuário.');
+      if (error) throw new Error(await getFunctionErrorMessage(error, 'Não foi possível remover o usuário.'));
       return;
     }
     window.localStorage.setItem(USERS_KEY, JSON.stringify(readUsers().filter((candidate) => candidate.id !== id)));
@@ -228,7 +243,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { error } = await supabase.functions.invoke('admin-manage-users', {
         body: { action: 'create_store', ...input, username, email },
       });
-      if (error) throw new Error(error.message || 'Não foi possível criar o usuário da loja.');
+      if (error) throw new Error(await getFunctionErrorMessage(error, 'Não foi possível criar o usuário da loja.'));
       return;
     }
     if (!demoModeAvailable) throw new Error('Configure o Supabase para habilitar a gestão de usuários.');
@@ -257,7 +272,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { data, error } = await supabase.functions.invoke('admin-manage-users', {
         body: { action: 'list_store', establishmentId },
       });
-      if (error) throw new Error(error.message || 'Não foi possível listar os usuários da loja.');
+      if (error) throw new Error(await getFunctionErrorMessage(error, 'Não foi possível listar os usuários da loja.'));
       return data.users as AppUser[];
     }
     return readUsers().filter((candidate) => candidate.id !== user?.id && candidate.establishmentIds.includes(establishmentId))
@@ -276,7 +291,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { error } = await supabase.functions.invoke('admin-manage-users', {
         body: { action: 'delete_store', userId, establishmentId },
       });
-      if (error) throw new Error(error.message || 'Não foi possível remover o usuário da loja.');
+      if (error) throw new Error(await getFunctionErrorMessage(error, 'Não foi possível remover o usuário da loja.'));
       return;
     }
     const updated = readUsers().flatMap((candidate) => {

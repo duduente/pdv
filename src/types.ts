@@ -150,7 +150,7 @@ export interface PaymentSplit {
   amount: number;
 }
 export type SaleOrigin = 'agendamento' | 'cardapio' | 'delivery' | 'produto_estoque' | 'comanda' | 'avulso';
-export type DeliveryStatus = 'production' | 'dispatched' | 'finalized';
+export type DeliveryStatus = 'production' | 'dispatched' | 'finalized' | 'cancelled';
 
 export interface DeliveryDriver {
   id: string;
@@ -229,6 +229,8 @@ export interface MenuOrder {
   deliveryStatus?: DeliveryStatus;
   driverId?: string;
   cashSaleId?: string;
+  cancelledAt?: string;
+  cancellationReason?: string;
 }
 
 export interface CashMovement {

@@ -7,7 +7,7 @@ import { Card } from '@/components/ui/card';
 type PublicOrderStatus = {
   store_name: string;
   order_type: 'delivery' | 'pickup' | null;
-  delivery_status: 'production' | 'dispatched' | 'finalized' | null;
+  delivery_status: 'production' | 'dispatched' | 'finalized' | 'cancelled' | null;
   created_at: string | null;
 };
 
@@ -21,12 +21,15 @@ function isPublicOrderStatus(value: unknown): value is PublicOrderStatus {
     && (value.order_type === 'delivery' || value.order_type === 'pickup' || value.order_type === null)
     && 'delivery_status' in value
     && (value.delivery_status === 'production' || value.delivery_status === 'dispatched'
-      || value.delivery_status === 'finalized' || value.delivery_status === null)
+      || value.delivery_status === 'finalized' || value.delivery_status === 'cancelled' || value.delivery_status === null)
     && 'created_at' in value
     && (typeof value.created_at === 'string' || value.created_at === null);
 }
 
 function getStatusDetails(order: PublicOrderStatus) {
+  if (order.delivery_status === 'cancelled') {
+    return { title: 'Pedido cancelado', description: 'Entre em contato com a loja se precisar de mais informações.', icon: PackageCheck };
+  }
   if (order.delivery_status === 'finalized') {
     return { title: 'Pedido concluído', description: 'Seu pedido foi finalizado.', icon: PackageCheck };
   }
