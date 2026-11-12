@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Trash2, UserPlus } from 'lucide-react';
+import { Loader2, Trash2, UserPlus } from 'lucide-react';
 import { useAuth, type AppUser } from '@/auth/AuthContext';
 import { hasStorePermission } from '@/auth/permissions';
 import type { AppPermission, Establishment, ModuleKey } from '@/types';
@@ -55,6 +55,7 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
   const [password, setPassword] = useState('');
   const [permissions, setPermissions] = useState<AppPermission[]>([]);
   const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -86,25 +87,33 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (creating) return;
     setError('');
     if (!permissions.length) {
       setError('Selecione pelo menos uma permissão.');
       return;
     }
+    setCreating(true);
     try {
       await createStoreUser({
         username, email, displayName, password,
         establishmentId: establishment.id, permissions,
       });
-      setUsers(await listStoreUsers(establishment.id));
       setUsername('');
       setEmail('');
       setDisplayName('');
       setPassword('');
       setPermissions([]);
       toast.success('Subusuário criado com as permissões selecionadas.');
+      try {
+        setUsers(await listStoreUsers(establishment.id));
+      } catch (reason) {
+        setError(`Subusuário criado, mas não foi possível atualizar a lista: ${reason instanceof Error ? reason.message : 'erro desconhecido.'}`);
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Não foi possível criar o subusuário.');
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -129,41 +138,46 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
         </p>
       </div>
       <form className="space-y-4" onSubmit={(event) => void create(event)}>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="space-y-1 text-sm font-medium">Usuário<Input autoComplete="off" value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
-          <label className="space-y-1 text-sm font-medium">E-mail<Input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-          <label className="space-y-1 text-sm font-medium">Nome de exibição<Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
-          <label className="space-y-1 text-sm font-medium">Senha (mínimo 8 caracteres)<Input type="password" autoComplete="new-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
-        </div>
-        <fieldset className="space-y-2 rounded-md border p-3">
-          <legend className="px-1 text-sm font-semibold">Permissões de acesso</legend>
-          <div className="space-y-2 border-b pb-3">
-            <p className="text-xs text-muted-foreground">Atalhos de perfil — as permissões podem ser ajustadas abaixo.</p>
-            <div className="flex flex-wrap gap-2">
-              {PERMISSION_PRESETS.map((preset) => (
-                <Button key={preset.label} type="button" size="sm" variant="outline" onClick={() => applyPermissionPreset(preset.permissions)}>
-                  {preset.label}
+        <fieldset disabled={creating} className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1 text-sm font-medium">Usuário<Input autoComplete="off" value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
+            <label className="space-y-1 text-sm font-medium">E-mail<Input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
+            <label className="space-y-1 text-sm font-medium">Nome de exibição<Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>
+            <label className="space-y-1 text-sm font-medium">Senha (mínimo 8 caracteres)<Input type="password" autoComplete="new-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+          </div>
+          <fieldset className="space-y-2 rounded-md border p-3">
+            <legend className="px-1 text-sm font-semibold">Permissões de acesso</legend>
+            <div className="space-y-2 border-b pb-3">
+              <p className="text-xs text-muted-foreground">Atalhos de perfil — as permissões podem ser ajustadas abaixo.</p>
+              <div className="flex flex-wrap gap-2">
+                {PERMISSION_PRESETS.map((preset) => (
+                  <Button key={preset.label} type="button" size="sm" variant="outline" onClick={() => applyPermissionPreset(preset.permissions)}>
+                    {preset.label}
+                  </Button>
+                ))}
+                <Button type="button" size="sm" variant="ghost" onClick={() => setPermissions([])}>
+                  Limpar seleção
                 </Button>
-              ))}
-              <Button type="button" size="sm" variant="ghost" onClick={() => setPermissions([])}>
-                Limpar seleção
-              </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                O perfil Gerente não inclui acesso a finanças, configurações da loja ou gestão de subusuários.
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              O perfil Gerente não inclui acesso a finanças, configurações da loja ou gestão de subusuários.
-            </p>
-          </div>
-          <div className="grid gap-x-6 sm:grid-cols-2">
-            {availablePermissions.map((permission) => (
-              <label key={permission} className="flex items-center gap-2 py-1.5 text-sm">
-                <input type="checkbox" checked={permissions.includes(permission)} onChange={() => togglePermission(permission)} />
-                <span>{PERMISSION_LABELS[permission]}</span>
-              </label>
-            ))}
-          </div>
+            <div className="grid gap-x-6 sm:grid-cols-2">
+              {availablePermissions.map((permission) => (
+                <label key={permission} className="flex items-center gap-2 py-1.5 text-sm">
+                  <input type="checkbox" checked={permissions.includes(permission)} onChange={() => togglePermission(permission)} />
+                  <span>{PERMISSION_LABELS[permission]}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
         </fieldset>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-        <Button type="submit"><UserPlus className="mr-2 h-4 w-4" />Criar subusuário</Button>
+        <Button type="submit" disabled={creating}>
+          {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <UserPlus className="mr-2 h-4 w-4" />}
+          <span role={creating ? 'status' : undefined}>{creating ? 'Criando subusuário...' : 'Criar subusuário'}</span>
+        </Button>
       </form>
       <div className="border-t pt-4">
         <h3 className="mb-2 text-sm font-semibold">Acessos desta loja</h3>
@@ -182,7 +196,7 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
                     {granted.includes('*') ? 'Todas as permissões' : grantedNames.join(' · ') || 'Sem permissões'}
                   </p>
                 </div>
-                <Button type="button" variant="ghost" size="icon" className="text-destructive" onClick={() => void remove(item)} aria-label={`Remover ${item.username}`}>
+                <Button type="button" variant="ghost" size="icon" className="text-destructive" disabled={creating} onClick={() => void remove(item)} aria-label={`Remover ${item.username}`}>
                   <Trash2 className="h-4 w-4" />
                 </Button>
               </div>

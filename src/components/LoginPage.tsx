@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Layers, LockKeyhole } from 'lucide-react';
+import { Eye, EyeOff, Layers, LockKeyhole } from 'lucide-react';
 import { useAuth } from '@/auth/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -10,6 +10,7 @@ export function LoginPage() {
   const { login, demoModeAvailable, authConfigured } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -37,7 +38,15 @@ export function LoginPage() {
           <div className="mb-5 flex items-center gap-2"><LockKeyhole className="h-4 w-4 text-primary" /><h2 className="font-semibold">Entrar</h2></div>
           <form className="space-y-4" onSubmit={submit}>
             <div className="space-y-1.5"><Label htmlFor="login-username">{authConfigured ? 'E-mail' : 'Usuário'}</Label><Input id="login-username" autoComplete={authConfigured ? 'email' : 'username'} type={authConfigured ? 'email' : 'text'} value={username} onChange={(event) => setUsername(event.target.value)} required /></div>
-            <div className="space-y-1.5"><Label htmlFor="login-password">Senha</Label><Input id="login-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></div>
+            <div className="space-y-1.5">
+              <Label htmlFor="login-password">Senha</Label>
+              <div className="relative">
+                <Input id="login-password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} className="pr-10" required />
+                <Button type="button" variant="ghost" size="icon" className="absolute right-0 top-0" aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'} aria-pressed={showPassword} onClick={() => setShowPassword((visible) => !visible)}>
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
             {!demoModeAvailable && !authConfigured && <p role="status" className="text-sm text-amber-800">Autenticação de produção não configurada. Conecte o provedor Supabase para habilitar o acesso.</p>}
             {demoModeAvailable && <p className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">Demonstração local: admin / 123. Esta conta não protege dados em produção.</p>}
