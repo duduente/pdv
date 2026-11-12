@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Loader2, Trash2, UserPlus } from 'lucide-react';
 import { useAuth, type AppUser } from '@/auth/AuthContext';
 import { hasStorePermission } from '@/auth/permissions';
@@ -56,13 +56,16 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
   const [permissions, setPermissions] = useState<AppPermission[]>([]);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const listVersion = useRef(0);
 
   useEffect(() => {
     let active = true;
+    const version = ++listVersion.current;
     void listStoreUsers(establishment.id).then((result) => {
-      if (active) setUsers(result);
+      if (active && listVersion.current === version) setUsers(result);
     }).catch((reason: unknown) => {
-      if (active) setError(reason instanceof Error ? reason.message : 'Não foi possível carregar os subusuários.');
+      if (active && listVersion.current === version) setError(reason instanceof Error ? reason.message : 'Não foi possível carregar os subusuários.');
     });
     return () => { active = false; };
   }, [establishment.id, listStoreUsers]);
@@ -87,7 +90,7 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (creating) return;
+    if (creating || removingId) return;
     setError('');
     if (!permissions.length) {
       setError('Selecione pelo menos uma permissão.');
@@ -106,6 +109,7 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
       setPermissions([]);
       toast.success('Subusuário criado com as permissões selecionadas.');
       try {
+        ++listVersion.current;
         setUsers(await listStoreUsers(establishment.id));
       } catch (reason) {
         setError(`Subusuário criado, mas não foi possível atualizar a lista: ${reason instanceof Error ? reason.message : 'erro desconhecido.'}`);
@@ -118,13 +122,19 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
   };
 
   const remove = async (target: AppUser) => {
+    if (creating || removingId) return;
     if (!window.confirm(`Remover ${target.displayName} desta loja?`)) return;
+    setError('');
+    setRemovingId(target.id);
     try {
       await deleteStoreUser(target.id, establishment.id);
-      setUsers(await listStoreUsers(establishment.id));
+      ++listVersion.current;
+      setUsers((current) => current.filter((item) => item.id !== target.id));
       toast.success('Acesso do usuário removido desta loja.');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Não foi possível remover o acesso.');
+    } finally {
+      setRemovingId(null);
     }
   };
 
@@ -174,7 +184,7 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
           </fieldset>
         </fieldset>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-        <Button type="submit" disabled={creating}>
+        <Button type="submit" disabled={creating || Boolean(removingId)}>
           {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <UserPlus className="mr-2 h-4 w-4" />}
           <span role={creating ? 'status' : undefined}>{creating ? 'Criando subusuário...' : 'Criar subusuário'}</span>
         </Button>
@@ -196,8 +206,9 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
                     {granted.includes('*') ? 'Todas as permissões' : grantedNames.join(' · ') || 'Sem permissões'}
                   </p>
                 </div>
-                <Button type="button" variant="ghost" size="icon" className="text-destructive" disabled={creating} onClick={() => void remove(item)} aria-label={`Remover ${item.username}`}>
-                  <Trash2 className="h-4 w-4" />
+                {removingId === item.id && <span role="status" className="text-xs text-muted-foreground">Removendo...</span>}
+                <Button type="button" variant="ghost" size="icon" className="text-destructive" disabled={creating || Boolean(removingId)} onClick={() => void remove(item)} aria-label={`Remover ${item.username}`}>
+                  {removingId === item.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" />}
                 </Button>
               </div>
             );

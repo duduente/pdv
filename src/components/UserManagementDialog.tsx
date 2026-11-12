@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Loader2, Trash2, UserPlus } from 'lucide-react';
 import { useApp } from '@/store';
 import { useAuth, type AppUser } from '@/auth/AuthContext';
@@ -20,11 +20,19 @@ export function UserManagementDialog({ open, onClose }: { open: boolean; onClose
   const [establishmentIds, setEstablishmentIds] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const listVersion = useRef(0);
 
   useEffect(() => {
-    if (open) void listUsers().then(setUsers).catch((reason: unknown) => {
-      setError(reason instanceof Error ? reason.message : 'Não foi possível carregar usuários.');
+    if (!open) return;
+    let active = true;
+    const version = ++listVersion.current;
+    void listUsers().then((result) => {
+      if (active && listVersion.current === version) setUsers(result);
+    }).catch((reason: unknown) => {
+      if (active && listVersion.current === version) setError(reason instanceof Error ? reason.message : 'Não foi possível carregar usuários.');
     });
+    return () => { active = false; };
   }, [listUsers, open]);
 
   const toggleEstablishment = (id: string) => {
@@ -35,7 +43,7 @@ export function UserManagementDialog({ open, onClose }: { open: boolean; onClose
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (creating) return;
+    if (creating || removingId) return;
     setError('');
     if (!establishmentIds.length) { setError('Selecione pelo menos um estabelecimento.'); return; }
     setCreating(true);
@@ -50,6 +58,7 @@ export function UserManagementDialog({ open, onClose }: { open: boolean; onClose
       setUsername(''); setEmail(''); setDisplayName(''); setPassword(''); setEstablishmentIds([]);
       toast.success('Usuário criado com as permissões selecionadas.');
       try {
+        ++listVersion.current;
         setUsers(await listUsers());
       } catch (reason) {
         setError(`Usuário criado, mas não foi possível atualizar a lista: ${reason instanceof Error ? reason.message : 'erro desconhecido.'}`);
@@ -62,12 +71,18 @@ export function UserManagementDialog({ open, onClose }: { open: boolean; onClose
   };
 
   const remove = async (id: string) => {
+    if (creating || removingId) return;
+    setError('');
+    setRemovingId(id);
     try {
       await deleteUser(id);
-      setUsers(await listUsers());
+      ++listVersion.current;
+      setUsers((current) => current.filter((item) => item.id !== id));
       toast.success('Usuário removido.');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Não foi possível remover o usuário.');
+    } finally {
+      setRemovingId(null);
     }
   };
 
@@ -101,7 +116,7 @@ export function UserManagementDialog({ open, onClose }: { open: boolean; onClose
           </fieldset>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <DialogFooter>
-            <Button type="submit" disabled={creating}>
+            <Button type="submit" disabled={creating || Boolean(removingId)}>
               {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
               <span role={creating ? 'status' : undefined}>{creating ? 'Criando usuário...' : 'Criar usuário'}</span>
             </Button>
@@ -113,7 +128,10 @@ export function UserManagementDialog({ open, onClose }: { open: boolean; onClose
             {users.map((item) => (
               <div key={item.id} className="flex items-center gap-3 py-2">
                 <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.displayName}</p><p className="text-xs text-muted-foreground">@{item.username} · {item.establishmentIds.length} loja(s)</p></div>
-                <Button type="button" variant="ghost" size="icon" className="text-destructive" disabled={creating} onClick={() => remove(item.id)} aria-label={`Excluir usuário ${item.username}`}><Trash2 className="h-4 w-4" /></Button>
+                {removingId === item.id && <span role="status" className="text-xs text-muted-foreground">Excluindo...</span>}
+                <Button type="button" variant="ghost" size="icon" className="text-destructive" disabled={creating || Boolean(removingId)} onClick={() => void remove(item.id)} aria-label={`Excluir usuário ${item.username}`}>
+                  {removingId === item.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" />}
+                </Button>
               </div>
             ))}
             {!users.length && <p className="py-3 text-sm text-muted-foreground">Nenhum usuário comum criado.</p>}
