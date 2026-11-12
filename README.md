@@ -38,7 +38,7 @@ Somente o Super Admin tem a aba **Finanças do Kito** no Painel Super Admin. Ao 
 
 Os campos de valor monetário usam o padrão brasileiro com duas casas decimais (`0,00`).
 
-## Funcionários (experimental)
+## Funcionários
 
 O Super Admin pode ativar **Funcionários** para cada loja junto com **Finanças**. Subusuários precisam da permissão de Finanças para gerenciar funcionários; o vínculo com um subusuário exige também acesso à gestão de usuários. Profissionais cadastrados nas configurações de agendamento e novos subusuários criam funcionários com salário, comissão e desconto inicialmente zerados. Todos os funcionários ativos aparecem na agenda; para retirá-los da agenda e das opções de venda, edite o cadastro em Funcionários e desative-os. A lista de agendamento não expõe salário, comissão ou desconto.
 
@@ -48,7 +48,7 @@ As abas separam cadastro, consumos, comissões e fechamento. No caixa e no pagam
 
 Após o término do mês, o fechamento soma salário e comissões, desconta consumos e estornos e transfere saldo negativo ao mês seguinte. Vendas canceladas após o fechamento geram ajuste em fechamento posterior. Quando há valor a pagar, é criada uma conta pendente em Finanças, que pode ser marcada como paga, mas não editada ou excluída.
 
-**Somente para testes:** não use com dados reais até validar a integração completa no ambiente Supabase. A migration `supabase/migrations/20261112020000_atomic_employee_records.sql` adiciona operações transacionais e detecção de conflito para funcionários, estoque, caixa, pedidos, comandas e agendamentos. A cobrança, o cancelamento e a exclusão de vendas vinculadas alteram o caixa e o registro de origem na mesma transação; o armazenamento local e o modo demonstração continuam sem garantias transacionais.
+A migration `supabase/migrations/20261112020000_atomic_employee_records.sql` adiciona operações transacionais e detecção de conflito para funcionários, estoque, caixa, pedidos, comandas e agendamentos. A cobrança, o cancelamento e a exclusão de vendas vinculadas alteram o caixa e o registro de origem na mesma transação; o armazenamento local e o modo demonstração continuam sem garantias transacionais. O teste `supabase/tests/employee_transactions.sql` verifica gravação conjunta, conflito e rollback no banco, sem manter as alterações.
 
 Essas migrations bloqueiam gravações diretas da versão anterior do aplicativo nesses registros e na lista de profissionais. Planeje uma janela de manutenção e backup, aplique as migrations pendentes em ordem no ambiente de testes e publique a versão correspondente do aplicativo antes de retomar o uso; todos os dispositivos devem recarregar a página. Não aplique a migration isoladamente em uma loja em funcionamento.
 

@@ -182,8 +182,8 @@ export function EmployeesModule() {
     event.preventDefault();
     if (!ready || !employee || !employee.active) { toast.error('Selecione um funcionário ativo e aguarde os dados.'); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(consumptionDate)) { toast.error('Informe a data do consumo.'); return; }
-    if (records.settlements.some((entry) => entry.employeeId === employee.id && entry.month === consumptionDate.slice(0, 7))) {
-      toast.error('O mês deste consumo já foi fechado.'); return;
+    if (records.settlements.some((entry) => entry.employeeId === employee.id && entry.month >= consumptionDate.slice(0, 7))) {
+      toast.error('O mês deste consumo ou um mês posterior já foi fechado.'); return;
     }
     const count = Number(quantity);
     if (!Number.isFinite(count) || count <= 0) { toast.error('Informe uma quantidade maior que zero.'); return; }
@@ -262,8 +262,8 @@ export function EmployeesModule() {
   const cancelConsumption = async (consumptionId: string) => {
     const consumption = records.consumptions.find((entry) => entry.consumptionId === consumptionId);
     if (!ready || !consumption || consumption.cancelled) return;
-    if (records.settlements.some((entry) => entry.employeeId === consumption.employeeId && entry.month === consumption.month)) {
-      toast.error('O consumo pertence a um mês já fechado.'); return;
+    if (records.settlements.some((entry) => entry.employeeId === consumption.employeeId && entry.month >= consumption.month)) {
+      toast.error('O mês deste consumo ou um mês posterior já foi fechado.'); return;
     }
     if (!window.confirm('Cancelar consumo? Se houve baixa de estoque, ajuste o estoque manualmente.')) return;
     const updatedFinances: StoreFinances = { ...finances, employees: {
@@ -277,7 +277,7 @@ export function EmployeesModule() {
   return (
     <div className="space-y-4">
       <div><h2 className="text-xl font-semibold">Funcionários</h2><p className="text-sm text-muted-foreground">Cadastros, consumos, comissões e fechamentos desta loja.</p></div>
-      <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Versão para testes: não use com dados reais. As operações ainda precisam ser validadas no Supabase e em vários dispositivos. O armazenamento local e o modo demonstração não possuem controle transacional.</p>
+      {!atomicRemote && <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Modo demonstração: dados locais não possuem controle transacional entre dispositivos.</p>}
       {storageError && <p role="alert" className="text-sm text-destructive">{storageError} Recarregue a página antes de tentar novamente.</p>}
       <Tabs defaultValue="employees">
         <TabsList className="flex h-auto flex-wrap justify-start">

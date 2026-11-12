@@ -109,6 +109,7 @@ describe('employee integration', () => {
       setField(field(container, 'Funcionário'), 'employee');
       setField(field(container, 'Origem'), 'inventory');
     });
+
     await act(async () => {
       setField(field(container, 'Item'), 'product');
       setField(field(container, 'Quantidade'), '2');
@@ -133,6 +134,14 @@ describe('employee integration', () => {
         settlements: [{ month: '2020-11', salaryCents: 10_000, commissionCents: 1_000, consumptionCents: 1_000, payableCents: 10_000 }],
       },
     });
+  });
+
+  it('only shows the local storage limitation in demonstration mode', async () => {
+    expect(container.textContent).toContain('Modo demonstração: dados locais');
+    fixtures.remote = true;
+    await act(async () => { root.render(<EmployeesModule />); });
+    expect(container.textContent).not.toContain('Modo demonstração: dados locais');
+    expect(container.textContent).not.toContain('Versão para testes');
   });
 
   it('creates an employee and publishes only the sales roster fields', async () => {
@@ -195,6 +204,35 @@ describe('employee integration', () => {
     await act(async () => { button(container, 'Fechar mês e gerar conta').click(); });
     expect(fixtures.error).toHaveBeenCalledWith('Feche o mês somente após seu término.');
     expect(fixtures.values['store-finances:store']).toMatchObject({ employees: { settlements: [] }, bills: [] });
+  });
+
+  it('prevents adding or cancelling a consumption before a later closed month', async () => {
+    const finances = fixtures.values['store-finances:store'] as {
+      employees: { consumptions: unknown[]; settlements: unknown[] };
+    };
+    finances.employees.consumptions.push({
+      consumptionId: 'old', employeeId: 'employee', month: '2020-10', amountCents: 500,
+      discountPercent: 0, description: 'Consumo anterior', createdAt: '2020-10-10',
+    });
+    finances.employees.settlements.push({
+      employeeId: 'employee', month: '2020-11', nextCarriedDebtCents: 0,
+      sales: [], consumptionIds: [], reversedSaleIds: [],
+    });
+    await act(async () => { root.render(<EmployeesModule />); });
+    await act(async () => {
+      setField(field(container, 'Funcionário'), 'employee');
+      setField(field(container, 'Descrição'), 'Outro consumo');
+      setField(field(container, 'Valor unitário'), '5');
+      setField(field(container, 'Data'), '2020-10-15');
+    });
+    await act(async () => {
+      button(container, 'Lançar consumo').closest('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    expect(fixtures.error).toHaveBeenLastCalledWith('O mês deste consumo ou um mês posterior já foi fechado.');
+    await act(async () => { button(container, 'Cancelar').click(); });
+    expect(fixtures.error).toHaveBeenLastCalledWith('O mês deste consumo ou um mês posterior já foi fechado.');
+    expect(finances.employees.consumptions).toHaveLength(1);
+    expect(finances.employees.consumptions[0]).not.toHaveProperty('cancelled');
   });
 
   it('does not apply inventory or consumption when the transaction fails', async () => {
