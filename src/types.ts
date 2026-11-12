@@ -1,4 +1,4 @@
-export type ModuleKey = 'agendamento' | 'cardapio' | 'pdv' | 'estoque' | 'comandas' | 'delivery' | 'finance';
+export type ModuleKey = 'agendamento' | 'cardapio' | 'pdv' | 'estoque' | 'comandas' | 'delivery' | 'finance' | 'employees';
 export type AppPermission =
   | 'dashboard'
   | 'agendamento'
@@ -166,6 +166,8 @@ export interface DeliverySettings {
 export interface CashSale {
   id: string;
   establishmentId: string;
+  employeeId?: string;
+  employeeCommissionPercent?: number;
   sessionId: string;
   createdAt: string;
   items: SaleItem[];

@@ -6,7 +6,10 @@ import {
 import { useApp } from '@/store';
 import { menuItems as initialItems, menuCategories as initialCategories, formatCurrency } from '@/mockData';
 import type { CartItem, DeliverySettings, MenuCategory, MenuItem, MenuOrder, PaymentMethod, PaymentSplit } from '@/types';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { syncPersistentState, usePersistentState } from '@/hooks/usePersistentState';
+import { commitEmployeeRecords } from '@/lib/atomicEmployeeRecords';
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/auth/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -17,11 +20,12 @@ import { PaymentDialog } from '@/components/modules/PaymentDialog';
 
 export function PublicMenuPage() {
   const { selectedEstablishment, goBack } = useApp();
+  const { user } = useAuth();
   const establishmentId = selectedEstablishment?.id ?? 'default';
   const isBurgerHouse = selectedEstablishment?.slug === 'burger-house';
   const [menuItems] = usePersistentState<MenuItem[]>(`menu-items:${establishmentId}`, isBurgerHouse ? initialItems : []);
   const [menuCategories] = usePersistentState<MenuCategory[]>(`menu-categories:${establishmentId}`, isBurgerHouse ? initialCategories : []);
-  const [, setOrders] = usePersistentState<MenuOrder[]>(`menu-orders:${establishmentId}`, []);
+  const [orders, setOrders, ordersLoaded, ordersSnapshot] = usePersistentState<MenuOrder[]>(`menu-orders:${establishmentId}`, []);
   const [deliverySettings] = usePersistentState<DeliverySettings>(`delivery-settings:${establishmentId}`, { deliveryFee: 0 });
   const [activeCat, setActiveCat] = useState('all');
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -111,18 +115,21 @@ export function PublicMenuPage() {
     setPaymentDialogOpen(true);
   };
 
-  const sendOrder = (splits: PaymentSplit[]) => {
+  const sendOrder = async (splits: PaymentSplit[]) => {
+    if (!ordersLoaded) {
+      toast.error('Aguarde o carregamento dos pedidos.');
+      return false;
+    }
     const trackingToken = globalThis.crypto?.randomUUID?.();
     if (!trackingToken) {
       toast.error('Não foi possível gerar um link seguro para acompanhar o pedido. Atualize o navegador e tente novamente.');
-      return;
+      return false;
     }
     const orderTrackingLink = `${window.location.origin}/?acompanhar=${trackingToken}`;
     const items = cart.map((i) => `*${i.quantity}x* ${i.name} — ${formatCurrency(i.price * i.quantity)}`).join('\n');
     const paymentDescription = splits.map((split) => `${paymentLabels[split.method]}: ${formatCurrency(split.amount)}`).join(' + ');
     const msg = `*NOVO PEDIDO - ${est.name}*\n\n*Modalidade: ENTREGA*\n\n${items}\n\nEntrega: ${formatCurrency(deliverySettings.deliveryFee)}\n*Total: ${formatCurrency(totalWithDelivery)}*\n\nCliente: ${customerName.trim()}\nTelefone: ${phone.trim()}\nCEP: ${formatPostalCode(postalCode)}\nEndereço: ${address.trim()}\nPagamento informado: ${paymentDescription}\n\nAcompanhe o status do pedido: ${orderTrackingLink}`;
-    const whatsappWindow = window.open(`https://wa.me/${est.whatsapp}?text=${encodeURIComponent(msg)}`, '_blank');
-    if (!whatsappWindow) toast.error('O navegador bloqueou a abertura do WhatsApp. O pedido será salvo e você poderá copiar o link de acompanhamento.');
+    const whatsappWindow = window.open('', '_blank');
     const order: MenuOrder = {
       id: globalThis.crypto?.randomUUID?.() ?? `order-${Date.now()}`,
       establishmentId: est.id,
@@ -143,7 +150,23 @@ export function PublicMenuPage() {
       paymentSplits: splits,
       deliveryStatus: 'production',
     };
-    setOrders((previous) => [...previous, order]);
+    const updatedOrders = [...orders, order];
+    if (supabase && user && !user.isDemo) {
+      try {
+        await commitEmployeeRecords(establishmentId, [{
+          snapshot: { ...ordersSnapshot, value: orders }, value: updatedOrders, write: true,
+        }]);
+        syncPersistentState(`menu-orders:${establishmentId}`, updatedOrders);
+      } catch (error) {
+        whatsappWindow?.close();
+        toast.error(error instanceof Error ? error.message : 'Não foi possível registrar o pedido.');
+        return false;
+      }
+    } else {
+      setOrders(updatedOrders);
+    }
+    if (whatsappWindow) whatsappWindow.location.href = `https://wa.me/${est.whatsapp}?text=${encodeURIComponent(msg)}`;
+    else toast.error('O navegador bloqueou a abertura do WhatsApp. O pedido foi salvo e você poderá copiar o link de acompanhamento.');
     setPaymentMethod(splits[0].method);
     setOrderSent(true);
     setTrackingLink(orderTrackingLink);
@@ -157,6 +180,7 @@ export function PublicMenuPage() {
     setDocument('');
     setCheckoutOpen(false);
     setCartOpen(false);
+    return true;
   };
 
   return (

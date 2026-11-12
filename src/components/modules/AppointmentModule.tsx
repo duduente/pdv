@@ -91,6 +91,7 @@ function ProfessionalRevenueTab() {
   const [appointments] = usePersistentState<Appointment[]>(
     `appointments:${establishmentId}`,
     isBarbershop ? initialAppts : [],
+    { readOnly: true },
   );
   const [services] = usePersistentState<Service[]>(
     `services:${establishmentId}`,
@@ -99,6 +100,7 @@ function ProfessionalRevenueTab() {
   const [cashRegister] = usePersistentState<CashRegisterData>(
     `cash-register:${establishmentId}`,
     { activeSessionId: null, sessions: [], sales: [], movements: [] },
+    { readOnly: true },
   );
   const start = getRevenuePeriodStart(period);
   const appointmentsById = new Map(appointments.map((appointment) => [appointment.id, appointment]));
@@ -421,7 +423,7 @@ function ProsTab() {
 function CalendarTab() {
   const { selectedEstablishment } = useApp();
   const isBarbershop = selectedEstablishment?.slug === 'barbearia-estilo';
-  const [appts, setAppts] = usePersistentState<Appointment[]>(
+  const [appts, setAppts, appointmentsLoaded] = usePersistentState<Appointment[]>(
     `appointments:${selectedEstablishment?.id ?? 'default'}`,
     isBarbershop ? initialAppts : [],
   );
@@ -465,6 +467,8 @@ function CalendarTab() {
     if (appointment.status === 'pending') return 'Pendente';
     return 'Confirmado';
   };
+
+  if (!appointmentsLoaded) return <p>Carregando agendamentos...</p>;
 
   return (
     <div className="space-y-4">

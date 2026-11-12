@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ArrowLeft, Check, Calendar, Clock, Scissors, User,
   MessageCircle, ChevronRight, ChevronLeft, Phone,
@@ -6,7 +6,10 @@ import {
 import { useApp } from '@/store';
 import { appointments as initialAppointments, professionals as initialProfessionals, services as initialServices, workingHours as initialHours, formatCurrency } from '@/mockData';
 import type { Appointment, Professional, Service, WorkingHours } from '@/types';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { syncPersistentState, usePersistentState } from '@/hooks/usePersistentState';
+import { commitEmployeeRecords } from '@/lib/atomicEmployeeRecords';
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/auth/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -38,11 +41,12 @@ function createTimeSlots(start: string, end: string, interval: number) {
 
 export function PublicBookingPage() {
   const { selectedEstablishment, goBack } = useApp();
+  const { user } = useAuth();
   const establishmentId = selectedEstablishment?.id ?? 'default';
   const isBarbershop = selectedEstablishment?.slug === 'barbearia-estilo';
   const [services] = usePersistentState<Service[]>(`services:${establishmentId}`, isBarbershop ? initialServices : []);
   const [professionals] = usePersistentState<Professional[]>(`professionals:${establishmentId}`, isBarbershop ? initialProfessionals : []);
-  const [appointments, setAppointments] = usePersistentState<Appointment[]>(`appointments:${establishmentId}`, isBarbershop ? initialAppointments : []);
+  const [appointments, setAppointments, appointmentsLoaded, appointmentsSnapshot] = usePersistentState<Appointment[]>(`appointments:${establishmentId}`, isBarbershop ? initialAppointments : []);
   const [hours] = usePersistentState<WorkingHours[]>(
     `working-hours:${establishmentId}`,
     initialHours,
@@ -59,6 +63,8 @@ export function PublicBookingPage() {
   const [clientName, setClientName] = useState('');
   const [clientWhatsapp, setClientWhatsapp] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
 
   if (!selectedEstablishment) return null;
   const est = selectedEstablishment;
@@ -95,7 +101,12 @@ export function PublicBookingPage() {
     return true;
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
+    if (savingRef.current) return;
+    if (!appointmentsLoaded) {
+      toast.error('Aguarde o carregamento dos agendamentos.');
+      return;
+    }
     if (!selectedService || appointments.some((appointment) => appointment.date === selectedDate && appointment.time === selectedTime)) {
       toast.error('Este horário acabou de ser reservado. Escolha outro horário.');
       setSelectedTime('');
@@ -112,9 +123,26 @@ export function PublicBookingPage() {
       status: 'confirmed',
       paymentStatus: 'unpaid',
     };
-    setAppointments((current) => [...current, appointment]);
-    setConfirmed(true);
-    toast.success('Agendamento confirmado!');
+    const updatedAppointments = [...appointments, appointment];
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      if (supabase && user && !user.isDemo) {
+        await commitEmployeeRecords(establishmentId, [{
+          snapshot: { ...appointmentsSnapshot, value: appointments }, value: updatedAppointments, write: true,
+        }]);
+        syncPersistentState(`appointments:${establishmentId}`, updatedAppointments);
+      } else {
+        setAppointments(updatedAppointments);
+      }
+      setConfirmed(true);
+      toast.success('Agendamento confirmado!');
+    } catch (error) {
+      toast.error(`Não foi possível confirmar o agendamento. ${error instanceof Error ? error.message : 'Tente novamente.'}`);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   const sendWhatsApp = () => {
@@ -401,7 +429,7 @@ export function PublicBookingPage() {
       <div className="fixed bottom-0 left-0 right-0 border-t bg-white/95 p-4 shadow-[0_-8px_24px_rgba(15,23,42,0.06)] backdrop-blur">
         <div className="mx-auto flex max-w-5xl gap-3 sm:px-2">
           {step > 0 && !confirmed && (
-            <Button variant="outline" onClick={() => setStep((s) => s - 1)} className="flex-1">
+            <Button variant="outline" disabled={saving} onClick={() => setStep((s) => s - 1)} className="flex-1">
               <ChevronLeft className="h-4 w-4 mr-1" />
               Voltar
             </Button>
@@ -418,9 +446,9 @@ export function PublicBookingPage() {
             </Button>
           )}
           {step === 3 && !confirmed && (
-            <Button className="flex-1" onClick={handleConfirm} style={{ backgroundColor: accent }}>
+            <Button className="flex-1" disabled={saving || !appointmentsLoaded} onClick={() => void handleConfirm()} style={{ backgroundColor: accent }}>
               <Check className="h-4 w-4 mr-1" />
-              Confirmar Agendamento
+              {saving ? 'Confirmando...' : 'Confirmar Agendamento'}
             </Button>
           )}
         </div>

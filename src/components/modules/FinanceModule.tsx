@@ -497,7 +497,7 @@ export function FinanceModule() {
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-semibold">{bill.description}</h3>
                       <BillStatusIndicator alert={alert} label={ALERT_LABELS[alert]} />
-                      <Badge variant="outline">{bill.paymentType === 'pix' ? 'Pix' : 'Boleto'}</Badge>
+                      <Badge variant="outline">{bill.source === 'employee-settlement' ? 'Funcionário' : bill.paymentType === 'pix' ? 'Pix' : 'Boleto'}</Badge>
                       {bill.isRecurring && <Badge variant="outline">Mensal</Badge>}
                     </div>
                     <p className={cn('mt-1 text-base font-semibold', DUE_DATE_CLASSES[alert])}>Vencimento: {new Date(`${bill.dueDate}T00:00:00`).toLocaleDateString('pt-BR')}</p>
@@ -508,8 +508,8 @@ export function FinanceModule() {
                     <Button type="button" size="sm" variant="outline" disabled={!financesLoaded} onClick={() => togglePaid(bill.id)}>
                       <Check className="mr-1 h-4 w-4" />{bill.paidAt ? 'Reabrir' : 'Marcar pago'}
                     </Button>
-                    <Button type="button" size="icon" variant="ghost" disabled={!financesLoaded} aria-label={`Editar ${bill.description}`} onClick={() => beginEdit(bill)}><Pencil className="h-4 w-4" /></Button>
-                    <Button type="button" size="icon" variant="ghost" className="text-destructive" disabled={!financesLoaded} aria-label={`Excluir ${bill.description}`} onClick={() => {
+                    <Button type="button" size="icon" variant="ghost" disabled={!financesLoaded || bill.source === 'employee-settlement'} aria-label={`Editar ${bill.description}`} onClick={() => beginEdit(bill)}><Pencil className="h-4 w-4" /></Button>
+                    <Button type="button" size="icon" variant="ghost" className="text-destructive" disabled={!financesLoaded || bill.source === 'employee-settlement'} aria-label={`Excluir ${bill.description}`} onClick={() => {
                       const recurrenceId = bill.isRecurring ? bill.recurrenceId ?? bill.id : undefined;
                       const confirmMessage = recurrenceId
                         ? `Excluir "${bill.description}" e encerrar a recorrência mensal?`

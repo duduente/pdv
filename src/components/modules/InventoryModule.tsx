@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Package, Plus, Trash2, AlertTriangle, Boxes, History } from 'lucide-react';
 import { products as initialProducts, formatCurrency } from '@/mockData';
 import { useApp } from '@/store';
 import type { InventoryMovement, Product } from '@/types';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { PERSISTENT_STATE_ERROR_EVENT, syncPersistentState, usePersistentState } from '@/hooks/usePersistentState';
+import { commitEmployeeRecords } from '@/lib/atomicEmployeeRecords';
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/auth/AuthContext';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,12 +27,14 @@ const NEW_CATEGORY_OPTION = '__new_category__';
 
 export function InventoryModule() {
   const { selectedEstablishment } = useApp();
+  const { user } = useAuth();
+  const establishmentId = selectedEstablishment?.id ?? 'default';
   const defaultProducts = selectedEstablishment?.slug === 'mercadinho-central' ? initialProducts : [];
-  const [items, setItems] = usePersistentState<Product[]>(
+  const [items, setItems, itemsLoaded, itemsSnapshot] = usePersistentState<Product[]>(
     `inventory:${selectedEstablishment?.id ?? 'default'}`,
     defaultProducts,
   );
-  const [movements, setMovements] = usePersistentState<InventoryMovement[]>(
+  const [movements, setMovements, movementsLoaded, movementsSnapshot] = usePersistentState<InventoryMovement[]>(
     `inventory-movements:${selectedEstablishment?.id ?? 'default'}`,
     [],
   );
@@ -47,6 +52,34 @@ export function InventoryModule() {
   const [adjustmentAmounts, setAdjustmentAmounts] = useState<Record<string, string>>({});
   const [stockDecreaseProductId, setStockDecreaseProductId] = useState<string | null>(null);
   const [stockDecreaseReason, setStockDecreaseReason] = useState('');
+  const savingRef = useRef(false);
+
+  const commitStock = async (updatedItems: Product[], updatedMovements: InventoryMovement[]) => {
+    if (savingRef.current) return false;
+    savingRef.current = true;
+    try {
+      if (supabase && user && !user.isDemo) {
+        const operations = [
+          { snapshot: { ...itemsSnapshot, value: items }, value: updatedItems, write: true },
+          { snapshot: { ...movementsSnapshot, value: movements }, value: updatedMovements, write: true },
+        ];
+        await commitEmployeeRecords(establishmentId, operations);
+        for (const operation of operations) syncPersistentState(operation.snapshot.key, operation.value);
+      } else {
+        setItems(updatedItems);
+        setMovements(updatedMovements);
+      }
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha ao salvar o estoque.';
+      window.dispatchEvent(new CustomEvent(PERSISTENT_STATE_ERROR_EVENT, {
+        detail: { key: `inventory:${establishmentId}`, message },
+      }));
+      return false;
+    } finally {
+      savingRef.current = false;
+    }
+  };
 
   const filtered = items.filter((p) =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -58,7 +91,7 @@ export function InventoryModule() {
   const lowStock = items.filter((product) => product.stock > 0 && product.stock <= thresholdFor(product));
   const outOfStock = items.filter((product) => product.stock <= 0);
 
-  const addProduct = () => {
+  const addProduct = async () => {
     const parsedPrice = Number(price);
     const parsedUnitCost = unitCost.trim() ? Number(unitCost) : undefined;
     const parsedStock = Number(stock);
@@ -86,7 +119,7 @@ export function InventoryModule() {
       : categoryChoice || 'Geral';
     const productCategory = resolveInventoryCategory(requestedCategory, categoryOptions);
     const id = globalThis.crypto?.randomUUID?.() ?? `pr${Date.now()}`;
-    setItems((prev) => [...prev, {
+    const updatedItems = [...items, {
       id,
       name: name.trim(),
       price: parsedPrice,
@@ -95,9 +128,9 @@ export function InventoryModule() {
       minimumStock: parsedMinimumStock,
       category: productCategory,
       unit: unit.trim(),
-    }]);
-    if (parsedStock > 0) {
-      setMovements((previous) => [...previous, {
+    }];
+    const updatedMovements: InventoryMovement[] = parsedStock > 0
+      ? [...movements, {
         id: globalThis.crypto?.randomUUID?.() ?? `inventory-${Date.now()}`,
         productId: id,
         productName: name.trim(),
@@ -105,8 +138,9 @@ export function InventoryModule() {
         quantity: parsedStock,
         unit: unit.trim(),
         createdAt: new Date().toISOString(),
-      }]);
-    }
+      }]
+      : movements;
+    if (!await commitStock(updatedItems, updatedMovements)) return;
     setName(''); setPrice(''); setUnitCost(''); setStock(''); setMinimumStock('5'); setCategoryChoice(''); setNewCategory(''); setUnit('un');
     toast.success('Produto cadastrado!');
   };
@@ -115,7 +149,7 @@ export function InventoryModule() {
     setItems((prev) => prev.filter((p) => p.id !== id));
   };
 
-  const adjustStock = (id: string, direction: -1 | 1, reason?: string): boolean => {
+  const adjustStock = async (id: string, direction: -1 | 1, reason?: string): Promise<boolean> => {
     const product = items.find((item) => item.id === id);
     const quantity = Number(adjustmentAmounts[id] || 1);
     if (!product) return false;
@@ -132,8 +166,8 @@ export function InventoryModule() {
       return false;
     }
     const delta = quantity * direction;
-    setItems((prev) => prev.map((item) => item.id === id ? { ...item, stock: item.stock + delta } : item));
-    setMovements((previous) => [...previous, {
+    const updatedItems = items.map((item) => item.id === id ? { ...item, stock: item.stock + delta } : item);
+    const updatedMovements: InventoryMovement[] = [...movements, {
       id: globalThis.crypto?.randomUUID?.() ?? `inventory-${Date.now()}`,
       productId: product.id,
       productName: product.name,
@@ -142,12 +176,12 @@ export function InventoryModule() {
       unit: product.unit,
       ...(reason?.trim() ? { reason: reason.trim() } : {}),
       createdAt: new Date().toISOString(),
-    }]);
-    return true;
+    }];
+    return commitStock(updatedItems, updatedMovements);
   };
 
-  const confirmStockDecrease = () => {
-    if (!stockDecreaseProductId || !adjustStock(stockDecreaseProductId, -1, stockDecreaseReason)) return;
+  const confirmStockDecrease = async () => {
+    if (!stockDecreaseProductId || !await adjustStock(stockDecreaseProductId, -1, stockDecreaseReason)) return;
     setStockDecreaseProductId(null);
     setStockDecreaseReason('');
   };
@@ -200,6 +234,8 @@ export function InventoryModule() {
     adjustment: 'Ajuste / saída',
     return: 'Estorno de venda',
   };
+
+  if (!itemsLoaded || !movementsLoaded) return <p>Carregando estoque...</p>;
 
   return (
     <div className="space-y-6">

@@ -2,14 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import {
   CalendarClock, UtensilsCrossed, Calculator, Package,
   Settings, Home, ExternalLink, Copy, Check,
-  Scissors, Boxes, Receipt, Upload, ClipboardList, Bike, WalletCards,
+  Scissors, Boxes, Receipt, Upload, ClipboardList, Bike, WalletCards, Users,
 } from 'lucide-react';
 import { useApp } from '@/store';
 import { useAuth } from '@/auth/AuthContext';
 import { UserMenu } from '@/components/UserMenu';
 import { supabase } from '@/lib/supabase';
 import { appointments as initialAppointments, MODULE_LABELS, formatCurrency, products as initialProducts } from '@/mockData';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { PERSISTENT_STATE_ERROR_EVENT, usePersistentState } from '@/hooks/usePersistentState';
+import { isAtomicEmployeeRecord } from '@/lib/atomicEmployeeRecords';
 import type { Appointment, CashRegisterData, ModuleKey, Product } from '@/types';
 import {
   Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -32,6 +33,7 @@ import { hasStorePermission } from '@/auth/permissions';
 import type { AppPermission } from '@/types';
 import { SupportChat } from '@/components/SupportChat';
 import { FinanceModule } from '@/components/modules/FinanceModule';
+import { EmployeesModule } from '@/components/modules/EmployeesModule';
 import { ChartTypeSelector } from '@/components/ChartTypeSelector';
 import type { ChartType } from '@/components/ChartTypeSelector';
 
@@ -43,6 +45,7 @@ const MODULE_ICONS: Record<ModuleKey, typeof CalendarClock> = {
   comandas: ClipboardList,
   delivery: Bike,
   finance: WalletCards,
+  employees: Users,
 };
 
 const EMPTY_CASH_REGISTER: CashRegisterData = {
@@ -69,18 +72,32 @@ export function MerchantPanel() {
   const [cashRegister] = usePersistentState<CashRegisterData>(
     `cash-register:${establishmentId}`,
     EMPTY_CASH_REGISTER,
+    { readOnly: true },
   );
     const isBarbershop = selectedEstablishment?.slug === 'barbearia-estilo';
     const isGrocery = selectedEstablishment?.slug === 'mercadinho-central';
     const [appointments] = usePersistentState<Appointment[]>(
       `appointments:${establishmentId}`,
       isBarbershop ? initialAppointments : [],
+      { readOnly: true },
     );
     const [products] = usePersistentState<Product[]>(
       `inventory:${establishmentId}`,
       isGrocery ? initialProducts : [],
+      { readOnly: true },
     );
   const [view, setView] = useState<MerchantView>('dashboard');
+  const [storageFailure, setStorageFailure] = useState('');
+  useEffect(() => {
+    const handleError = (event: Event) => {
+      const detail = (event as CustomEvent<{ key: string; message: string }>).detail;
+      if (detail && isAtomicEmployeeRecord(detail.key) && detail.key.endsWith(`:${establishmentId}`)) {
+        setStorageFailure(detail.message);
+      }
+    };
+    window.addEventListener(PERSISTENT_STATE_ERROR_EVENT, handleError);
+    return () => window.removeEventListener(PERSISTENT_STATE_ERROR_EVENT, handleError);
+  }, [establishmentId]);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [dashboardPeriod, setDashboardPeriod] = useState<DashboardPeriod>('week');
   const [dashboardReferenceDate, setDashboardReferenceDate] = useState(() => {
@@ -96,7 +113,7 @@ export function MerchantPanel() {
     const canAccessModule = (module: ModuleKey) => module === 'pdv'
       ? (['pdv-sales', 'pdv-movements', 'pdv-reports', 'pdv-sessions'] as AppPermission[])
         .some((permission) => hasStorePermission(user, establishment.id, permission))
-      : hasStorePermission(user, establishment.id, module);
+      : hasStorePermission(user, establishment.id, module === 'employees' ? 'finance' : module);
     const modules = (Object.keys(establishment.modules) as ModuleKey[])
       .filter((module) => establishment.modules[module] && canAccessModule(module));
     const settingsAllowed = hasStorePermission(user, establishment.id, 'store-settings')
@@ -115,7 +132,7 @@ export function MerchantPanel() {
   const canAccessModule = (module: ModuleKey) => module === 'pdv'
     ? (['pdv-sales', 'pdv-movements', 'pdv-reports', 'pdv-sessions'] as AppPermission[])
       .some((permission) => hasStorePermission(user, est.id, permission))
-    : hasStorePermission(user, est.id, module);
+    : hasStorePermission(user, est.id, module === 'employees' ? 'finance' : module);
   const activeModules = (Object.keys(est.modules) as ModuleKey[]).filter((module) => est.modules[module] && canAccessModule(module));
   const canViewDashboard = hasStorePermission(user, est.id, 'dashboard');
   const canViewSettings = hasStorePermission(user, est.id, 'store-settings')
@@ -208,6 +225,14 @@ export function MerchantPanel() {
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] min-h-0 overflow-hidden">
+      {storageFailure && <div role="alertdialog" aria-modal="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4">
+        <Card className="max-w-lg space-y-3 p-6">
+          <h2 className="text-lg font-semibold">Não foi possível confirmar os dados</h2>
+          <p>Uma alteração pode não ter sido salva. {storageFailure}</p>
+          <p>Recarregue e confira os dados antes de repetir qualquer operação.</p>
+          <Button type="button" onClick={() => window.location.reload()}>Recarregar página</Button>
+        </Card>
+      </div>}
       {/* Sidebar */}
       <aside className="flex h-full min-h-0 w-16 shrink-0 flex-col border-r border-slate-200/80 bg-white dark:border-slate-800 dark:bg-slate-900 md:w-64">
         <div className="border-b border-border/70 p-3 md:p-5">
@@ -290,6 +315,7 @@ export function MerchantPanel() {
           {view === 'dashboard' && canViewDashboard && <DashboardView />}
           {view === 'settings' && canViewSettings && <SettingsView />}
           {view === 'finance' && canViewFinance && <FinanceModule key={est.id} />}
+          {view === 'employees' && est.modules.employees && canAccessModule('employees') && <EmployeesModule key={est.id} />}
           {view === 'agendamento' && canAccessModule('agendamento') && <AppointmentModule key={est.id} />}
           {view === 'cardapio' && canAccessModule('cardapio') && <MenuModule key={est.id} />}
           {view === 'pdv' && canViewCash && <CashRegisterModule key={est.id} />}

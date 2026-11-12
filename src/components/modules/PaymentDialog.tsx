@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import type { PaymentMethod, PaymentSplit } from '@/types';
 import { formatCurrency } from '@/mockData';
@@ -6,6 +6,7 @@ import { CurrencyInput } from '@/components/ui/currency-input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
+import type { EmployeeRosterEntry } from '@/lib/employeeSettlement';
 
 const METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'dinheiro', label: 'Dinheiro' },
@@ -22,7 +23,12 @@ type PaymentDialogProps = {
   defaultSplits?: PaymentSplit[];
   mode?: 'receive' | 'select';
   onOpenChange: (open: boolean) => void;
-  onConfirm: (splits: PaymentSplit[], change: number) => void;
+  onConfirm: (splits: PaymentSplit[], change: number) => void | boolean | Promise<void | boolean>;
+  employeeSelection?: {
+    employees: EmployeeRosterEntry[];
+    selectedId: string;
+    onChange: (id: string) => void;
+  };
 };
 
 function toCents(value: number) {
@@ -30,7 +36,7 @@ function toCents(value: number) {
 }
 
 export function PaymentDialog({
-  open, total, defaultMethod, defaultSplits, mode = 'receive', onOpenChange, onConfirm,
+  open, total, defaultMethod, defaultSplits, mode = 'receive', onOpenChange, onConfirm, employeeSelection,
 }: PaymentDialogProps) {
   const initialSplits = useMemo(
     () => defaultSplits?.length ? defaultSplits.map((split) => ({ ...split })) : [{ method: defaultMethod, amount: total }],
@@ -38,6 +44,8 @@ export function PaymentDialog({
   );
   const [splits, setSplits] = useState<PaymentSplit[]>(initialSplits);
   const [cashReceived, setCashReceived] = useState(total);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const totalCents = toCents(total);
   const allocatedCents = useMemo(() => splits.reduce((sum, split) => sum + toCents(split.amount), 0), [splits]);
   const cashAmount = splits.find((split) => split.method === 'dinheiro')?.amount ?? 0;
@@ -78,7 +86,8 @@ export function PaymentDialog({
     setSplits((current) => [...current, { method: availableMethod.value, amount: 0 }]);
   };
 
-  const confirm = () => {
+  const confirm = async () => {
+    if (savingRef.current) return;
     if (hasInvalidSplit || splits.some((split) => split.amount <= 0)) {
       toast.error('Informe um valor maior que zero para cada forma de pagamento');
       return;
@@ -91,12 +100,21 @@ export function PaymentDialog({
       toast.error('O valor recebido em dinheiro não pode ser menor que a parte em dinheiro');
       return;
     }
-    onConfirm(splits, change);
-    onOpenChange(false);
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const result = await onConfirm(splits, change);
+      if (result !== false) onOpenChange(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível confirmar o pagamento.');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => { if (!savingRef.current) onOpenChange(next); }}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{mode === 'receive' ? 'Receber pagamento' : 'Informar pagamento'}</DialogTitle>
@@ -107,6 +125,14 @@ export function PaymentDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
+          {employeeSelection && (
+            <label className="block space-y-1 text-sm font-medium">Funcionário responsável
+              <select value={employeeSelection.selectedId} onChange={(event) => employeeSelection.onChange(event.target.value)} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm font-normal">
+                <option value="">Sem funcionário</option>
+                {employeeSelection.employees.filter((employee) => employee.active).map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
+              </select>
+            </label>
+          )}
           <div className="rounded-lg border bg-muted/30 p-4 text-center">
             <p className="text-sm text-muted-foreground">Valor total</p>
             <p className="text-3xl font-bold">{formatCurrency(total)}</p>
@@ -163,9 +189,9 @@ export function PaymentDialog({
           )}
         </div>
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button type="button" onClick={confirm} disabled={!exactTotal || hasInvalidSplit || (mode === 'receive' && cashTenderShort) || splits.some((split) => split.amount <= 0)}>
-            {mode === 'receive' ? 'Confirmar pagamento' : 'Continuar'}
+          <Button type="button" variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button type="button" onClick={confirm} disabled={saving || !exactTotal || hasInvalidSplit || (mode === 'receive' && cashTenderShort) || splits.some((split) => split.amount <= 0)}>
+            {saving ? 'Salvando...' : mode === 'receive' ? 'Confirmar pagamento' : 'Continuar'}
           </Button>
         </DialogFooter>
       </DialogContent>

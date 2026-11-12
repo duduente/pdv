@@ -3,7 +3,8 @@ import { Ban, Bike, Bell, Check, ChevronDown, Clock3, Pencil, Plus, Printer, Tru
 import { useAuth } from '@/auth/AuthContext';
 import { useApp } from '@/store';
 import { formatCurrency, menuItems as initialMenuItems } from '@/mockData';
-import { syncPersistentState, usePersistentState } from '@/hooks/usePersistentState';
+import { PERSISTENT_STATE_ERROR_EVENT, syncPersistentState, usePersistentState } from '@/hooks/usePersistentState';
+import { commitEmployeeRecords, type AtomicRecordOperation } from '@/lib/atomicEmployeeRecords';
 import { supabase } from '@/lib/supabase';
 import type {
   CashRegisterData, CashSale, DeliveryDriver, DeliverySettings, DeliveryStatus,
@@ -17,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { PaymentDialog } from '@/components/modules/PaymentDialog';
+import { employeeSaleAttribution, type EmployeeRosterEntry } from '@/lib/employeeSettlement';
 import { AuditHistory } from '@/components/modules/AuditHistory';
 import { toast } from 'sonner';
 import { digitsOnly, formatPostalCode, lookupPostalAddress } from '@/lib/brazil';
@@ -87,9 +89,23 @@ export function DeliveryModule() {
   const { user } = useAuth();
   const establishmentId = selectedEstablishment?.id ?? 'default';
   const ordersStorageKey = `menu-orders:${establishmentId}`;
-  const [orders, setOrders] = usePersistentState<MenuOrder[]>(ordersStorageKey, []);
-  const [register, setRegister] = usePersistentState<CashRegisterData>(`cash-register:${establishmentId}`, EMPTY_REGISTER);
+  const [orders, setOrders, ordersLoaded, ordersSnapshot] = usePersistentState<MenuOrder[]>(ordersStorageKey, []);
+  const [register, setRegister, registerLoaded, registerSnapshot] = usePersistentState<CashRegisterData>(`cash-register:${establishmentId}`, EMPTY_REGISTER);
   const [drivers] = usePersistentState<DeliveryDriver[]>(`delivery-drivers:${establishmentId}`, []);
+  const [employeeRoster, , employeeRosterLoaded, rosterSnapshot] = usePersistentState<EmployeeRosterEntry[]>(
+    `employee-roster:${establishmentId}`, [], { readOnly: true },
+  );
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
+  const [rosterError, setRosterError] = useState('');
+  useEffect(() => {
+    setRosterError('');
+    const handleError = (event: Event) => {
+      const detail = (event as CustomEvent<{ key: string; message: string }>).detail;
+      if (detail.key === `employee-roster:${establishmentId}`) setRosterError(detail.message);
+    };
+    window.addEventListener(PERSISTENT_STATE_ERROR_EVENT, handleError);
+    return () => window.removeEventListener(PERSISTENT_STATE_ERROR_EVENT, handleError);
+  }, [establishmentId]);
   const [settings] = usePersistentState<DeliverySettings>(`delivery-settings:${establishmentId}`, DEFAULT_SETTINGS);
   const [menuItems] = usePersistentState<MenuItem[]>(
     `menu-items:${establishmentId}`,
@@ -126,6 +142,7 @@ export function DeliveryModule() {
   );
 
   useEffect(() => {
+    if (!registerLoaded || !ordersLoaded) return;
     let active = true;
     const recordUndocumentedWebsiteOrders = (currentOrders: MenuOrder[]) => {
       const events = currentOrders
@@ -184,7 +201,7 @@ export function DeliveryModule() {
       seenOrderIds.current = new Set(initialOrders.map((order) => order.id));
       remoteNotificationsReady.current = true;
       recordUndocumentedWebsiteOrders(initialOrders);
-      syncPersistentState(ordersStorageKey, initialOrders);
+      if (data) syncPersistentState(ordersStorageKey, initialOrders);
 
       const channel = client
         .channel(`delivery-orders:${establishmentId}`)
@@ -225,7 +242,7 @@ export function DeliveryModule() {
       active = false;
       if (subscribedChannel) void client.removeChannel(subscribedChannel);
     };
-  }, [establishmentId, ordersStorageKey, setRegister, user]);
+  }, [establishmentId, ordersStorageKey, ordersLoaded, registerLoaded, setRegister, user]);
 
   useEffect(() => {
     if (!remoteNotificationsReady.current) return;
@@ -279,6 +296,7 @@ export function DeliveryModule() {
   }, []);
 
   if (!selectedEstablishment) return null;
+  if (!registerLoaded || !ordersLoaded) return <p>Carregando pedidos e caixa...</p>;
 
   const accentBorderStyle = getAccentBorderStyle(selectedEstablishment.theme.accentColor);
   const deliveryOrders = orders
@@ -501,6 +519,10 @@ export function DeliveryModule() {
   };
 
   const openPaymentDialog = (order: MenuOrder) => {
+    if (selectedEstablishment?.modules.employees && (!employeeRosterLoaded || rosterError)) {
+      toast.error(rosterError ? `Não foi possível carregar funcionários: ${rosterError}` : 'Aguarde o carregamento dos funcionários.');
+      return;
+    }
     if (order.deliveryStatus !== 'dispatched') return;
     if (order.status === 'paid' || order.cashSaleId) {
       toast.error('Este pedido já foi registrado no caixa');
@@ -511,17 +533,35 @@ export function DeliveryModule() {
       toast.error('Abra uma sessão no caixa antes de finalizar o pagamento');
       return;
     }
+    setSelectedEmployeeId('');
     setPaymentOrder(order);
   };
 
-  const finalizePayment = (splits: PaymentSplit[], change: number) => {
-    if (!paymentOrder) return;
-    const order = paymentOrder;
+  const finalizePayment = async (splits: PaymentSplit[], change: number) => {
+    if (!paymentOrder) return false;
+    let attribution: ReturnType<typeof employeeSaleAttribution>;
+    try {
+      attribution = employeeSaleAttribution(selectedEmployeeId, employeeRoster);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível registrar a comissão.');
+      return false;
+    }
+    const order = orders.find((entry) => entry.id === paymentOrder.id);
+    if (!order || order.deliveryStatus !== 'dispatched' || order.status === 'paid' || order.cashSaleId
+      || register.sales.some((sale) => sale.origin === 'delivery' && sale.sourceRecordId === order.id && sale.status !== 'cancelled')) {
+      toast.error('Este pedido não está disponível para pagamento. Atualize os dados.');
+      return false;
+    }
+    if (JSON.stringify(order) !== JSON.stringify(paymentOrder)) {
+      toast.error('O pedido mudou. Abra o pagamento novamente para conferir os valores.');
+      setPaymentOrder(null);
+      return false;
+    }
     const session = register.sessions.find((entry) => entry.id === register.activeSessionId && !entry.closedAt);
     if (!session) {
       toast.error('Abra uma sessão no caixa antes de finalizar o pagamento');
       setPaymentOrder(null);
-      return;
+      return false;
     }
     const deliveryFeeValue = Math.max(0, order.deliveryFee ?? 0);
     const total = Math.round((order.total + deliveryFeeValue) * 100) / 100;
@@ -544,6 +584,7 @@ export function DeliveryModule() {
     const sale: CashSale = {
       id: saleId,
       establishmentId,
+      ...attribution,
       sessionId: session.id,
       createdAt: new Date().toISOString(),
       items: saleItems,
@@ -571,15 +612,36 @@ export function DeliveryModule() {
       occurredAt,
       summary: 'Pedido finalizado e pagamento registrado no caixa.',
     });
-    setRegister((current) => appendAuditEvent(
-      appendAuditEvent({ ...current, sales: [...current.sales, sale] }, saleEvent),
+    const updatedRegister = appendAuditEvent(
+      appendAuditEvent({ ...register, sales: [...register.sales, sale] }, saleEvent),
       orderEvent,
-    ));
-    setOrders((current) => current.map((entry) => entry.id === order.id
+    );
+    const updatedOrders: MenuOrder[] = orders.map((entry) => entry.id === order.id
       ? { ...entry, status: 'paid', deliveryStatus: 'finalized', cashSaleId: saleId }
-      : entry));
+      : entry);
+    if (supabase && user && !user.isDemo) {
+      const operations: AtomicRecordOperation[] = [
+        { snapshot: { ...registerSnapshot, value: register }, value: updatedRegister, write: true },
+        { snapshot: { ...ordersSnapshot, value: orders }, value: updatedOrders, write: true },
+      ];
+      if (attribution.employeeId) operations.push({ snapshot: { ...rosterSnapshot, value: employeeRoster }, write: false });
+      try {
+        await commitEmployeeRecords(establishmentId, operations);
+        for (const operation of operations) if (operation.write) syncPersistentState(operation.snapshot.key, operation.value);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Falha ao salvar o pagamento.';
+        window.dispatchEvent(new CustomEvent(PERSISTENT_STATE_ERROR_EVENT, {
+          detail: { key: ordersStorageKey, message },
+        }));
+        return false;
+      }
+    } else {
+      setRegister(updatedRegister);
+      setOrders(updatedOrders);
+    }
     setPaymentOrder(null);
     toast.success('Pagamento finalizado e registrado no caixa');
+    return true;
   };
 
   const updateOrderDriver = (orderId: string, driverId: string) => {
@@ -915,6 +977,11 @@ export function DeliveryModule() {
         total={paymentOrder ? Math.round((paymentOrder.total + (paymentOrder.deliveryFee ?? 0)) * 100) / 100 : 0}
         defaultMethod={paymentOrder?.paymentMethod ?? 'dinheiro'}
         defaultSplits={paymentOrder?.paymentSplits}
+        employeeSelection={selectedEstablishment?.modules.employees ? {
+          employees: employeeRoster,
+          selectedId: selectedEmployeeId,
+          onChange: setSelectedEmployeeId,
+        } : undefined}
         onOpenChange={(open) => { if (!open) setPaymentOrder(null); }}
         onConfirm={finalizePayment}
       />

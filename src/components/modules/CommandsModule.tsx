@@ -33,7 +33,7 @@ function getLocalDateTimeNow() {
 export function CommandsModule() {
   const { selectedEstablishment } = useApp();
   const establishmentId = selectedEstablishment?.id ?? 'default';
-  const [commands, setCommands] = usePersistentState<Command[]>(`commands:${establishmentId}`, []);
+  const [commands, setCommands, commandsLoaded] = usePersistentState<Command[]>(`commands:${establishmentId}`, []);
   const [menuItems] = usePersistentState<MenuItem[]>(
     `menu-items:${establishmentId}`,
     selectedEstablishment?.slug === 'burger-house' ? initialMenuItems : [],
@@ -55,6 +55,7 @@ export function CommandsModule() {
   const sortedReservations = sortTableReservations(reservations);
 
   if (!selectedEstablishment) return null;
+  if (!commandsLoaded) return <p>Carregando comandas...</p>;
 
   const createCommand = () => {
     const command: Command = {

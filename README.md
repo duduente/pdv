@@ -34,6 +34,18 @@ Somente o Super Admin tem a aba **Finanças do Kito** no Painel Super Admin. Ao 
 
 Os campos de valor monetário usam o padrão brasileiro com duas casas decimais (`0,00`).
 
+## Funcionários (experimental)
+
+O Super Admin pode ativar **Funcionários** para cada loja junto com **Finanças**. Subusuários precisam da permissão de Finanças para gerenciar funcionários; o vínculo opcional com um subusuário exige também acesso à gestão de usuários. No Supabase, aplique as migrations pendentes, incluindo `supabase/migrations/20261112010000_employee_roster_access.sql`, antes de usar a integração.
+
+As abas separam cadastro, consumos, comissões e fechamento. No caixa e no pagamento de delivery, a escolha de funcionário é opcional; a comissão usa o valor integral da venda e o percentual registrado no pagamento. Para preservar o histórico, vendas com funcionário podem ser canceladas, mas não excluídas definitivamente. Consumos de estoque reduzem o saldo e registram movimentação; itens do cardápio não baixam estoque automaticamente. Cancelar consumo exige ajuste manual do estoque.
+
+Após o término do mês, o fechamento soma salário e comissões, desconta consumos e estornos e transfere saldo negativo ao mês seguinte. Vendas canceladas após o fechamento geram ajuste em fechamento posterior. Quando há valor a pagar, é criada uma conta pendente em Finanças, que pode ser marcada como paga, mas não editada ou excluída.
+
+**Somente para testes:** não use com dados reais até validar a integração completa no ambiente Supabase. A migration `supabase/migrations/20261112020000_atomic_employee_records.sql` adiciona operações transacionais e detecção de conflito para funcionários, estoque, caixa, pedidos, comandas e agendamentos. A cobrança, o cancelamento e a exclusão de vendas vinculadas alteram o caixa e o registro de origem na mesma transação; o armazenamento local e o modo demonstração continuam sem garantias transacionais.
+
+Essa migration bloqueia gravações diretas da versão anterior do aplicativo nesses registros. Planeje uma janela de manutenção e backup, aplique as migrations pendentes no ambiente de testes e publique a versão correspondente do aplicativo antes de retomar o uso; todos os dispositivos devem recarregar a página. Não aplique a migration isoladamente em uma loja em funcionamento.
+
 ## Perfis de subusuários
 
 Ao criar subusuários, o responsável pode aplicar os atalhos **Atendente**, **Caixa** ou **Gerente** e depois personalizar as permissões. Os atalhos respeitam as permissões que o responsável pode conceder e os módulos ativos da loja. O perfil Gerente não inclui finanças, configurações da loja nem gestão de subusuários.

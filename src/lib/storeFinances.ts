@@ -1,3 +1,5 @@
+import type { EmployeeRecords } from '@/lib/employeeSettlement';
+
 export interface FinanceBill {
   id: string;
   description: string;
@@ -12,9 +14,11 @@ export interface FinanceBill {
   recurringMonth?: string;
   pixCode?: string;
   paidAt?: string;
+  source?: 'employee-settlement';
 }
 
 export interface StoreFinances {
+  employees?: EmployeeRecords;
   recurring: {
     enabled: boolean;
     dueDay: number;

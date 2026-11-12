@@ -17,6 +17,7 @@ export const MODULE_LABELS: Record<string, string> = {
   comandas: 'Comandas',
   delivery: 'Delivery',
   finance: 'Finanças',
+  employees: 'Funcionários',
 };
 
 export const MODULE_ICONS: Record<string, string> = {
@@ -46,6 +47,7 @@ export const establishments: Establishment[] = [
       comandas: false,
       delivery: false,
       finance: true,
+      employees: false,
     },
     theme: {
       name: 'Barbearia Estilo',
@@ -71,6 +73,7 @@ export const establishments: Establishment[] = [
       comandas: true,
       delivery: true,
       finance: true,
+      employees: false,
     },
     theme: {
       name: 'Burger House',
@@ -96,6 +99,7 @@ export const establishments: Establishment[] = [
       comandas: false,
       delivery: false,
       finance: true,
+      employees: false,
     },
     theme: {
       name: 'Mercadinho Central',
@@ -121,6 +125,7 @@ export const establishments: Establishment[] = [
       comandas: true,
       delivery: true,
       finance: true,
+      employees: false,
     },
     theme: {
       name: 'Loja Completa',

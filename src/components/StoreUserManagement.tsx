@@ -32,6 +32,7 @@ const MODULE_PERMISSIONS: Partial<Record<ModuleKey, AppPermission>> = {
   comandas: 'comandas',
   delivery: 'delivery',
   finance: 'finance',
+  employees: 'finance',
 };
 
 const PERMISSION_PRESETS: { label: string; permissions: AppPermission[] }[] = [

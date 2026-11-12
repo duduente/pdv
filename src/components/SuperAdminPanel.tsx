@@ -37,6 +37,7 @@ const MODULE_META: Record<ModuleKey, { label: string; icon: typeof CalendarClock
   comandas: { label: 'Comandas', icon: ClipboardList },
   delivery: { label: 'Delivery', icon: Bike },
   finance: { label: 'Finanças', icon: WalletCards },
+  employees: { label: 'Funcionários', icon: Users },
 };
 
 export function SuperAdminPanel() {
@@ -66,6 +67,7 @@ export function SuperAdminPanel() {
     comandas: establishments.filter((e) => e.modules.comandas).length,
     delivery: establishments.filter((e) => e.modules.delivery).length,
     finance: establishments.filter((e) => e.modules.finance).length,
+    employees: establishments.filter((e) => e.modules.employees).length,
   };
 
   const activeModules = Object.entries(moduleCounts).sort(([, a], [, b]) => b - a)[0];
@@ -424,6 +426,7 @@ function CreateEstablishmentModal({
     comandas: false,
     delivery: false,
     finance: false,
+    employees: false,
   });
   const [error, setError] = useState('');
 
@@ -437,6 +440,7 @@ function CreateEstablishmentModal({
     if (!slug) { setError('Informe um nome que possa ser usado como endereço da loja.'); return; }
     if (existingSlugs.includes(slug)) { setError('Já existe uma loja com este nome/endereço.'); return; }
     if (!Object.values(modules).some(Boolean)) { setError('Ative pelo menos um módulo.'); return; }
+    if (modules.employees && !modules.finance) { setError('O módulo Funcionários precisa do módulo Finanças ativo.'); return; }
     const parsedMonthlyRevenue = Number(monthlyRevenue);
     if (!Number.isFinite(parsedMonthlyRevenue) || parsedMonthlyRevenue < 0) { setError('Informe uma mensalidade válida, maior ou igual a zero.'); return; }
     onCreate({
@@ -608,6 +612,10 @@ function EditEstablishmentModal({
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
           <Button onClick={() => {
+            if (modules.employees && !modules.finance) {
+              toast.error('O módulo Funcionários precisa do módulo Finanças ativo.');
+              return;
+            }
             onSave({
               name: name.trim(),
               owner: owner.trim(),

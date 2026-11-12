@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useAuth } from '@/auth/AuthContext';
 import { supabase } from '@/lib/supabase';
+import { AtomicRecordError, commitEmployeeRecords, isAtomicEmployeeRecord, type AtomicRecordSnapshot } from '@/lib/atomicEmployeeRecords';
 
 const PERSISTENT_STATE_EVENT = 'app:persistent-state-change';
 export const PERSISTENT_STATE_ERROR_EVENT = 'app:persistent-state-error';
@@ -35,13 +36,22 @@ export function usePersistentState<T>(
   key: string,
   initialValue: T,
   options?: { readOnly?: boolean },
-): [T, Dispatch<SetStateAction<T>>, boolean] {
+): [T, Dispatch<SetStateAction<T>>, boolean, AtomicRecordSnapshot<T>] {
   const { user } = useAuth();
   const isReadOnly = options?.readOnly ?? false;
   const usesRemoteStorage = Boolean(supabase && user && !user.isDemo);
   const isEstablishmentIndex = key === 'establishments';
   const instanceId = useRef(crypto.randomUUID());
   const skipNextPersist = useRef(false);
+  const atomicSessionRef = useRef({
+    key, snapshot: null as AtomicRecordSnapshot<T> | null,
+    queue: Promise.resolve(), pending: 0, failed: false,
+  });
+  if (atomicSessionRef.current.key !== key) {
+    atomicSessionRef.current = { key, snapshot: null, queue: Promise.resolve(), pending: 0, failed: false };
+  }
+  const atomicSession = atomicSessionRef.current;
+  const atomicRemote = usesRemoteStorage && isAtomicEmployeeRecord(key);
   const initialValueRef = useRef(initialValue);
   initialValueRef.current = initialValue;
   const [storedState, setStoredState] = useState(() => ({
@@ -57,6 +67,12 @@ export function usePersistentState<T>(
     const handleChange = (event: Event) => {
       const detail = (event as CustomEvent<{ key: string; value: T; source?: string }>).detail;
       if (detail?.key !== key || detail.source === instanceId.current) return;
+      if (atomicRemote) {
+        if (atomicSession.pending > 0) {
+          return;
+        }
+        atomicSession.snapshot = { key, value: detail.value, exists: true };
+      }
       setStoredState((current) => {
         if (current.key === key && current.value === detail.value) return current;
         skipNextPersist.current = true;
@@ -64,6 +80,7 @@ export function usePersistentState<T>(
       });
     };
     const handleStorage = (event: StorageEvent) => {
+      if (usesRemoteStorage) return;
       if (event.key !== key || !event.newValue) return;
       try {
         const newValue = JSON.parse(event.newValue) as T;
@@ -82,7 +99,7 @@ export function usePersistentState<T>(
       window.removeEventListener(PERSISTENT_STATE_EVENT, handleChange);
       window.removeEventListener('storage', handleStorage);
     };
-  }, [key]);
+  }, [atomicRemote, atomicSession, key, usesRemoteStorage]);
 
   useEffect(() => {
     if (!usesRemoteStorage || !supabase || isEstablishmentIndex) {
@@ -112,32 +129,83 @@ export function usePersistentState<T>(
       if (!active) return;
       if (error) {
         notifyPersistentStateError(key, error.message);
-        setStoredState({ key, value: initialValueRef.current, loaded: true });
         return;
       }
       if (data) {
+        atomicSession.snapshot = { key, value: data.value as T, exists: true };
+        skipNextPersist.current = true;
         setStoredState({ key, value: data.value as T, loaded: true });
         return;
       }
 
       const legacyValue = readValue(key, initialValueRef.current);
       if (isReadOnly) {
+        atomicSession.snapshot = { key, value: initialValueRef.current, exists: false };
+        skipNextPersist.current = true;
         setStoredState({ key, value: initialValueRef.current, loaded: true });
         return;
       }
-      const { error: insertError } = await supabase.from('tenant_records').upsert({
+      if (atomicRemote) {
+        try {
+          await commitEmployeeRecords(tenantId, [{
+            snapshot: { key, value: legacyValue, exists: false }, value: legacyValue, write: true,
+          }]);
+        } catch (insertError) {
+          if (!(insertError instanceof AtomicRecordError) || insertError.code !== '40001') {
+            if (active) notifyPersistentStateError(key, insertError instanceof Error ? insertError.message : 'Falha ao criar o registro.');
+            return;
+          }
+          const { data: existing, error: readError } = await supabase
+            .from('tenant_records').select('value').eq('storage_key', key).maybeSingle();
+          if (!active) return;
+          if (readError || !existing) {
+            notifyPersistentStateError(key, readError?.message ?? (insertError instanceof Error ? insertError.message : 'Falha ao criar o registro.'));
+            return;
+          }
+          atomicSession.snapshot = { key, value: existing.value as T, exists: true };
+          skipNextPersist.current = true;
+          setStoredState({ key, value: existing.value as T, loaded: true });
+          return;
+        }
+        if (!active) return;
+        atomicSession.snapshot = { key, value: legacyValue, exists: true };
+        skipNextPersist.current = true;
+        setStoredState({ key, value: legacyValue, loaded: true });
+        return;
+      }
+      const { error: insertError } = await supabase.from('tenant_records').insert({
         storage_key: key,
         tenant_id: tenantId,
         value: legacyValue,
-      }, { onConflict: 'storage_key' });
-      if (active) {
-        if (insertError) notifyPersistentStateError(key, insertError.message);
-        setStoredState({ key, value: insertError ? initialValueRef.current : legacyValue, loaded: true });
+      });
+      if (!active) return;
+      if (insertError?.code === '23505') {
+        const { data: existing, error: readError } = await supabase
+          .from('tenant_records')
+          .select('value')
+          .eq('storage_key', key)
+          .maybeSingle();
+        if (!active) return;
+        if (readError || !existing) {
+          notifyPersistentStateError(key, readError?.message ?? 'Registro existente não está acessível.');
+          return;
+        }
+        skipNextPersist.current = true;
+        setStoredState({ key, value: existing.value as T, loaded: true });
+        return;
       }
-    })();
+      if (insertError) {
+        notifyPersistentStateError(key, insertError.message);
+        return;
+      }
+      skipNextPersist.current = true;
+      setStoredState({ key, value: legacyValue, loaded: true });
+    })().catch((error: unknown) => {
+      if (active) notifyPersistentStateError(key, error instanceof Error ? error.message : 'Falha ao carregar os dados.');
+    });
 
     return () => { active = false; };
-  }, [isEstablishmentIndex, isReadOnly, key, usesRemoteStorage]);
+  }, [atomicRemote, atomicSession, isEstablishmentIndex, isReadOnly, key, usesRemoteStorage]);
 
   useEffect(() => {
     if (isReadOnly) return;
@@ -149,6 +217,23 @@ export function usePersistentState<T>(
     if (usesRemoteStorage && supabase && !isEstablishmentIndex) {
       const separatorIndex = key.indexOf(':');
       if (separatorIndex < 1) return;
+      if (atomicRemote) {
+        atomicSession.pending += 1;
+        atomicSession.queue = atomicSession.queue.then(async () => {
+          if (atomicSession.failed) return;
+          if (!atomicSession.snapshot) throw new Error('Os dados ainda não foram carregados.');
+          await commitEmployeeRecords(key.slice(separatorIndex + 1), [{
+            snapshot: atomicSession.snapshot, value, write: true,
+          }]);
+          atomicSession.snapshot = { key, value, exists: true };
+          notifyPersistentStateChange(key, value, instanceId.current);
+          notifyPersistentStateSaved(key);
+        }).catch((error: unknown) => {
+          atomicSession.failed = true;
+          notifyPersistentStateError(key, error instanceof Error ? error.message : 'Falha ao salvar os dados.');
+        }).finally(() => { atomicSession.pending -= 1; });
+        return;
+      }
       void supabase.from('tenant_records').upsert({
         storage_key: key,
         tenant_id: key.slice(separatorIndex + 1),
@@ -160,6 +245,8 @@ export function usePersistentState<T>(
           notifyPersistentStateChange(key, value, instanceId.current);
           notifyPersistentStateSaved(key);
         }
+      }, (error: unknown) => {
+        notifyPersistentStateError(key, error instanceof Error ? error.message : 'Falha ao salvar os dados.');
       });
       return;
     }
@@ -171,7 +258,7 @@ export function usePersistentState<T>(
     } catch {
       notifyPersistentStateError(key, 'O armazenamento local está indisponível ou sem espaço.');
     }
-  }, [isEstablishmentIndex, isCurrentKey, isReadOnly, key, storedState.loaded, usesRemoteStorage, value]);
+  }, [atomicRemote, atomicSession, isEstablishmentIndex, isCurrentKey, isReadOnly, key, storedState.loaded, usesRemoteStorage, value]);
 
   const setValue = useCallback<Dispatch<SetStateAction<T>>>((nextValue) => {
     setStoredState((currentState) => {
@@ -189,5 +276,5 @@ export function usePersistentState<T>(
     });
   }, [initialValue, key, usesRemoteStorage]);
 
-  return [value, setValue, isLoaded];
+  return [value, setValue, isLoaded, atomicSession.snapshot ?? { key, value, exists: false }];
 }

@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import {
   ArrowDownCircle, ArrowUpCircle, Banknote, BarChart3, Calculator, ClipboardList, Download,
   CreditCard, DollarSign, LockKeyhole, Plus, Receipt, Search,
@@ -9,7 +9,9 @@ import { appointments as initialAppointments, menuItems as initialMenuItems, pro
 import { useApp } from '@/store';
 import { useAuth } from '@/auth/AuthContext';
 import { hasStorePermission } from '@/auth/permissions';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { PERSISTENT_STATE_ERROR_EVENT, syncPersistentState, usePersistentState } from '@/hooks/usePersistentState';
+import { commitEmployeeRecords, type AtomicRecordOperation } from '@/lib/atomicEmployeeRecords';
+import { supabase } from '@/lib/supabase';
 import { calculateExpectedCash, calculateProfitSummary, closeCashSession, getPeriodRange, isDateInReportPeriod, reverseInventorySale, type ReportPeriod } from '@/lib/criticalFlows';
 import type {
   Appointment, CashExpense, CashMovement, CashRegisterData, CashSale, CashSession, DeliveryDriver, InventoryMovement,
@@ -32,6 +34,7 @@ import type { ChartType } from '@/components/ChartTypeSelector';
 import { PaymentDialog } from '@/components/modules/PaymentDialog';
 import { AuditHistory } from '@/components/modules/AuditHistory';
 import { appendAuditEvent, createAuditEvent } from '@/lib/auditLog';
+import { employeeSaleAttribution, type EmployeeRosterEntry } from '@/lib/employeeSettlement';
 
 type Period = ReportPeriod;
 
@@ -164,6 +167,14 @@ function paymentLabel(sale: CashSale) {
   }).join(' · ');
 }
 
+type SaleChanges = {
+  stock?: { products: Product[]; movements: InventoryMovement[] };
+  checkRoster?: boolean;
+  orders?: MenuOrder[];
+  commands?: Command[];
+  appointments?: Appointment[];
+};
+
 export function CashRegisterModule() {
   const { selectedEstablishment } = useApp();
   const { user } = useAuth();
@@ -172,19 +183,33 @@ export function CashRegisterModule() {
   const canViewMovements = hasStorePermission(user, establishmentId, 'pdv-movements');
   const canViewReports = hasStorePermission(user, establishmentId, 'pdv-reports');
   const canViewSessions = hasStorePermission(user, establishmentId, 'pdv-sessions');
-  const [register, setRegister] = usePersistentState<CashRegisterData>(`cash-register:${establishmentId}`, EMPTY_REGISTER);
-  const [products, setProducts] = usePersistentState<Product[]>(
+  const [register, setRegister, registerLoaded, registerSnapshot] = usePersistentState<CashRegisterData>(`cash-register:${establishmentId}`, EMPTY_REGISTER, { readOnly: !canViewSales && !canViewMovements && !canViewSessions });
+  const [products, setProducts, productsLoaded, productsSnapshot] = usePersistentState<Product[]>(
     `inventory:${establishmentId}`,
     selectedEstablishment?.modules.estoque && selectedEstablishment.slug === 'mercadinho-central' ? initialProducts : [],
+    { readOnly: !canViewSales },
   );
-  const [, setInventoryMovements] = usePersistentState<InventoryMovement[]>(`inventory-movements:${establishmentId}`, []);
+  const [inventoryMovements, setInventoryMovements, movementsLoaded, movementsSnapshot] = usePersistentState<InventoryMovement[]>(`inventory-movements:${establishmentId}`, [], { readOnly: !canViewSales });
   const [menuItems] = usePersistentState<MenuItem[]>(
     `menu-items:${establishmentId}`,
     selectedEstablishment?.modules.cardapio && selectedEstablishment.slug === 'burger-house' ? initialMenuItems : [],
   );
-  const [orders, setOrders] = usePersistentState<MenuOrder[]>(`menu-orders:${establishmentId}`, []);
+  const [orders, setOrders, ordersLoaded, ordersSnapshot] = usePersistentState<MenuOrder[]>(`menu-orders:${establishmentId}`, [], { readOnly: !canViewSales });
   const [drivers] = usePersistentState<DeliveryDriver[]>(`delivery-drivers:${establishmentId}`, []);
-  const [commands, setCommands] = usePersistentState<Command[]>(`commands:${establishmentId}`, []);
+  const [employeeRoster, , employeeRosterLoaded, rosterSnapshot] = usePersistentState<EmployeeRosterEntry[]>(
+    `employee-roster:${establishmentId}`, [], { readOnly: true },
+  );
+  const [rosterError, setRosterError] = useState('');
+  useEffect(() => {
+    setRosterError('');
+    const handleError = (event: Event) => {
+      const detail = (event as CustomEvent<{ key: string; message: string }>).detail;
+      if (detail.key === `employee-roster:${establishmentId}`) setRosterError(detail.message);
+    };
+    window.addEventListener(PERSISTENT_STATE_ERROR_EVENT, handleError);
+    return () => window.removeEventListener(PERSISTENT_STATE_ERROR_EVENT, handleError);
+  }, [establishmentId]);
+  const [commands, setCommands, commandsLoaded, commandsSnapshot] = usePersistentState<Command[]>(`commands:${establishmentId}`, [], { readOnly: !canViewSales });
   const [services] = usePersistentState<Service[]>(
     `services:${establishmentId}`,
     selectedEstablishment?.modules.agendamento && selectedEstablishment.slug === 'barbearia-estilo' ? initialServices : [],
@@ -193,17 +218,56 @@ export function CashRegisterModule() {
     `professionals:${establishmentId}`,
     selectedEstablishment?.modules.agendamento && selectedEstablishment.slug === 'barbearia-estilo' ? initialProfessionals : [],
   );
-  const [appointments, setAppointments] = usePersistentState<Appointment[]>(
+  const [appointments, setAppointments, appointmentsLoaded, appointmentsSnapshot] = usePersistentState<Appointment[]>(
     `appointments:${establishmentId}`,
     selectedEstablishment?.modules.agendamento && selectedEstablishment.slug === 'barbearia-estilo' ? initialAppointments : [],
+    { readOnly: !canViewSales },
   );
   const [tab, setTab] = useState(() => canViewReports ? 'reports'
     : canViewSales ? 'sales'
       : canViewMovements ? 'movements'
         : 'session');
   const activeSession = register.sessions.find((session) => session.id === register.activeSessionId) ?? null;
+  const stockTransactionRef = useRef(false);
+  const commitSaleChange = async (nextRegister: CashRegisterData, changes: SaleChanges = {}) => {
+    if (stockTransactionRef.current) return false;
+    stockTransactionRef.current = true;
+    const nextMovements = changes.stock ? [...inventoryMovements, ...changes.stock.movements] : inventoryMovements;
+    try {
+      if (supabase && user && !user.isDemo) {
+        const operations: AtomicRecordOperation[] = [
+          { snapshot: { ...registerSnapshot, value: register }, value: nextRegister, write: true },
+        ];
+        if (changes.stock) operations.push(
+          { snapshot: { ...productsSnapshot, value: products }, value: changes.stock.products, write: true },
+          { snapshot: { ...movementsSnapshot, value: inventoryMovements }, value: nextMovements, write: true },
+        );
+        if (changes.checkRoster) operations.push({ snapshot: { ...rosterSnapshot, value: employeeRoster }, value: employeeRoster, write: false });
+        if (changes.orders) operations.push({ snapshot: { ...ordersSnapshot, value: orders }, value: changes.orders, write: true });
+        if (changes.commands) operations.push({ snapshot: { ...commandsSnapshot, value: commands }, value: changes.commands, write: true });
+        if (changes.appointments) operations.push({ snapshot: { ...appointmentsSnapshot, value: appointments }, value: changes.appointments, write: true });
+        await commitEmployeeRecords(establishmentId, operations);
+        for (const operation of operations) if (operation.write) syncPersistentState(operation.snapshot.key, operation.value);
+      } else {
+        setRegister(nextRegister);
+        if (changes.stock) { setProducts(changes.stock.products); setInventoryMovements(nextMovements); }
+        if (changes.orders) setOrders(changes.orders);
+        if (changes.commands) setCommands(changes.commands);
+        if (changes.appointments) setAppointments(changes.appointments);
+      }
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha ao salvar a venda e o estoque.';
+      window.dispatchEvent(new CustomEvent(PERSISTENT_STATE_ERROR_EVENT, {
+        detail: { key: `cash-register:${establishmentId}`, message },
+      }));
+      return false;
+    } finally {
+      stockTransactionRef.current = false;
+    }
+  };
 
-  const cancelSale = (sale: CashSale) => {
+  const cancelSale = async (sale: CashSale) => {
     if (sale.status === 'cancelled') return;
     if (!window.confirm(`Cancelar a venda de ${money(sale.total)}? O estoque/pedido/agendamento relacionado será estornado.`)) return;
     const cancellationReason = window.prompt('Informe o motivo obrigatório do cancelamento/estorno:')?.trim();
@@ -229,47 +293,53 @@ export function CashRegisterModule() {
         summary: 'Pagamento cancelado; pedido voltou para pendente.',
       }))
       : [];
-    setRegister((current) => {
-      const sales = current.sales.map((item) => item.id === sale.id
+    const sales = register.sales.map((item) => item.id === sale.id
         ? { ...item, status: 'cancelled' as const, cancelledAt, cancellationReason }
         : item);
-      return orderEvents.reduce((updated, event) => appendAuditEvent(updated, event), appendAuditEvent({
-        ...current,
+    const updatedRegister = orderEvents.reduce((updated, event) => appendAuditEvent(updated, event), appendAuditEvent({
+        ...register,
         sales,
-        sessions: current.sessions.map((session) => {
+        sessions: register.sessions.map((session) => {
           if (session.id !== sale.sessionId || !session.closedAt) return session;
-          const expected = calculateExpectedCash(session, sales, current.movements);
+          const expected = calculateExpectedCash(session, sales, register.movements);
           return { ...session, expectedCash: expected, difference: (session.countedCash ?? 0) - expected };
         }),
       }, auditEvent));
-    });
-
-    if (sale.origin === 'produto_estoque') {
-      const reversed = reverseInventorySale(sale, products, cancelledAt, createId);
-      if (reversed) {
-        setProducts(reversed.products);
-        setInventoryMovements((current) => [...current, ...reversed.movements]);
-      }
-    }
-    if (sale.origin === 'cardapio' || sale.origin === 'delivery') {
-      setOrders((current) => current.map((order) => sourceIds.has(order.id)
+    const reversed = sale.origin === 'produto_estoque' ? reverseInventorySale(sale, products, cancelledAt, createId) : null;
+    const updatedOrders: MenuOrder[] | undefined = sale.origin === 'cardapio' || sale.origin === 'delivery'
+      ? orders.map((order) => sourceIds.has(order.id)
         ? sale.origin === 'delivery'
           ? { ...order, status: 'pending', deliveryStatus: 'dispatched', cashSaleId: undefined }
           : { ...order, status: 'pending' }
-        : order));
+        : order)
+      : undefined;
+    if (sale.origin === 'agendamento' && [...sourceIds].some((id) => !appointments.some((entry) => entry.id === id))) {
+      toast.error('Agendamento vinculado não encontrado. Verifique o histórico antes de cancelar.');
+      return;
     }
-    if (sale.origin === 'agendamento') {
-      setAppointments((current) => current.map((appointment) => sourceIds.has(appointment.id)
+    if (sale.commandId && !commands.some((entry) => entry.id === sale.commandId)) {
+      toast.error('Comanda vinculada não encontrada. Verifique o histórico antes de cancelar.');
+      return;
+    }
+    const updatedAppointments: Appointment[] | undefined = sale.origin === 'agendamento' && sourceIds.size > 0
+      ? appointments.map((appointment) => sourceIds.has(appointment.id)
         ? { ...appointment, status: 'confirmed', paymentStatus: 'unpaid' }
-        : appointment));
-    }
-    if (sale.commandId) {
-      setCommands((current) => current.map((command) => command.id === sale.commandId ? { ...command, status: 'open' } : command));
-    }
+        : appointment)
+      : undefined;
+    const updatedCommands: Command[] | undefined = sale.commandId
+      ? commands.map((command) => command.id === sale.commandId ? { ...command, status: 'open' } : command)
+      : undefined;
+    if (!await commitSaleChange(updatedRegister, {
+      stock: reversed ?? undefined, orders: updatedOrders, appointments: updatedAppointments, commands: updatedCommands,
+    })) return;
     toast.success('Venda cancelada e estornada');
   };
 
-  const deleteSale = (sale: CashSale) => {
+  const deleteSale = async (sale: CashSale) => {
+    if (sale.employeeId) {
+      toast.error('Vendas com comissão não podem ser excluídas. Cancele a venda para preservar o histórico do funcionário.');
+      return;
+    }
     const alreadyReversed = sale.status === 'cancelled';
     const warning = alreadyReversed
       ? `Excluir definitivamente o registro cancelado de ${money(sale.total)}?`
@@ -298,44 +368,48 @@ export function CashRegisterModule() {
         summary: 'Venda excluída e pedido voltou para pendente.',
       }))
       : [];
-    setRegister((current) => {
-      const sales = current.sales.filter((item) => item.id !== sale.id);
-      return orderEvents.reduce((updated, event) => appendAuditEvent(updated, event), appendAuditEvent({
-        ...current,
+    const sales = register.sales.filter((item) => item.id !== sale.id);
+    const updatedRegister = orderEvents.reduce((updated, event) => appendAuditEvent(updated, event), appendAuditEvent({
+        ...register,
         sales,
-        sessions: current.sessions.map((session) => {
+        sessions: register.sessions.map((session) => {
           if (session.id !== sale.sessionId || !session.closedAt) return session;
-          const expected = calculateExpectedCash(session, sales, current.movements);
+          const expected = calculateExpectedCash(session, sales, register.movements);
           return { ...session, expectedCash: expected, difference: (session.countedCash ?? 0) - expected };
         }),
       }, auditEvent));
-    });
-    if (!alreadyReversed && sale.origin === 'produto_estoque') {
-      const reversed = reverseInventorySale(sale, products, deletedAt, createId);
-      if (reversed) {
-        setProducts(reversed.products);
-        setInventoryMovements((current) => [...current, ...reversed.movements]);
-      }
-    }
-    if (!alreadyReversed && (sale.origin === 'cardapio' || sale.origin === 'delivery')) {
-      setOrders((current) => current.map((order) => sourceIds.has(order.id)
+    const reversed = !alreadyReversed && sale.origin === 'produto_estoque' ? reverseInventorySale(sale, products, deletedAt, createId) : null;
+    const updatedOrders: MenuOrder[] | undefined = !alreadyReversed && (sale.origin === 'cardapio' || sale.origin === 'delivery')
+      ? orders.map((order) => sourceIds.has(order.id)
         ? sale.origin === 'delivery'
           ? { ...order, status: 'pending', deliveryStatus: 'dispatched', cashSaleId: undefined }
           : { ...order, status: 'pending' }
-        : order));
+        : order)
+      : undefined;
+    if (!alreadyReversed && sale.origin === 'agendamento' && [...sourceIds].some((id) => !appointments.some((entry) => entry.id === id))) {
+      toast.error('Agendamento vinculado não encontrado. Verifique o histórico antes de excluir.');
+      return;
     }
-    if (!alreadyReversed && sale.origin === 'agendamento') {
-      setAppointments((current) => current.map((appointment) => sourceIds.has(appointment.id)
+    if (!alreadyReversed && sale.commandId && !commands.some((entry) => entry.id === sale.commandId)) {
+      toast.error('Comanda vinculada não encontrada. Verifique o histórico antes de excluir.');
+      return;
+    }
+    const updatedAppointments: Appointment[] | undefined = !alreadyReversed && sale.origin === 'agendamento' && sourceIds.size > 0
+      ? appointments.map((appointment) => sourceIds.has(appointment.id)
         ? { ...appointment, status: 'confirmed', paymentStatus: 'unpaid' }
-        : appointment));
-    }
-    if (!alreadyReversed && sale.commandId) {
-      setCommands((current) => current.map((command) => command.id === sale.commandId ? { ...command, status: 'open' } : command));
-    }
+        : appointment)
+      : undefined;
+    const updatedCommands: Command[] | undefined = !alreadyReversed && sale.commandId
+      ? commands.map((command) => command.id === sale.commandId ? { ...command, status: 'open' } : command)
+      : undefined;
+    if (!await commitSaleChange(updatedRegister, {
+      stock: reversed ?? undefined, orders: updatedOrders, appointments: updatedAppointments, commands: updatedCommands,
+    })) return;
     toast.success('Venda excluída e itens relacionados estornados');
   };
 
   if (!selectedEstablishment) return null;
+  if (!registerLoaded || !productsLoaded || !movementsLoaded || !ordersLoaded || !commandsLoaded || !appointmentsLoaded) return <p>Carregando dados do caixa...</p>;
 
   return (
     <div className="space-y-6">
@@ -352,6 +426,7 @@ export function CashRegisterModule() {
       <p className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
         Dados separados por estabelecimento e salvos neste navegador. Ainda não há sincronização com servidor ou outros dispositivos.
       </p>
+      {selectedEstablishment.modules.employees && rosterError && <p role="alert" className="text-sm text-destructive">Não foi possível carregar funcionários: {rosterError}. Confira a migration e recarregue a página.</p>}
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex h-auto flex-wrap justify-start">
@@ -370,19 +445,16 @@ export function CashRegisterModule() {
             modules={selectedEstablishment.modules}
             session={activeSession}
             products={products}
-            setProducts={setProducts}
-            setInventoryMovements={setInventoryMovements}
+            commitSaleChange={commitSaleChange}
             menuItems={menuItems}
             orders={orders}
-            setOrders={setOrders}
             commands={commands}
-            setCommands={setCommands}
             services={services}
             professionals={professionals}
             appointments={appointments}
-            setAppointments={setAppointments}
             register={register}
-            setRegister={setRegister}
+            employeeRoster={selectedEstablishment.modules.employees ? employeeRoster : []}
+            employeeRosterLoaded={!selectedEstablishment.modules.employees || (employeeRosterLoaded && !rosterError)}
           />
         </TabsContent>}
         {canViewMovements && <TabsContent value="movements" className="mt-4">
@@ -517,37 +589,38 @@ function DashboardTab({ sales, movements, expenses }: {
 }
 
 function SalesTab({
-  establishmentId, user, modules, session, products, setProducts, menuItems, orders, setOrders, commands, setCommands, services, professionals, appointments, setAppointments, register, setRegister,
-  setInventoryMovements,
+  establishmentId, user, modules, session, products, menuItems, orders, commands, services, professionals, appointments, register,
+  commitSaleChange, employeeRoster, employeeRosterLoaded,
 }: {
   establishmentId: string;
   user: ReturnType<typeof useAuth>['user'];
   modules: Record<ModuleKey, boolean>;
   session: CashSession | null;
   products: Product[];
-  setProducts: Dispatch<SetStateAction<Product[]>>;
-  setInventoryMovements: Dispatch<SetStateAction<InventoryMovement[]>>;
+  commitSaleChange: (register: CashRegisterData, changes?: SaleChanges) => Promise<boolean>;
   menuItems: MenuItem[];
   orders: MenuOrder[];
-  setOrders: Dispatch<SetStateAction<MenuOrder[]>>;
   commands: Command[];
-  setCommands: Dispatch<SetStateAction<Command[]>>;
   services: Service[];
   professionals: Professional[];
   appointments: Appointment[];
-  setAppointments: Dispatch<SetStateAction<Appointment[]>>;
   register: CashRegisterData;
-  setRegister: Dispatch<SetStateAction<CashRegisterData>>;
+  employeeRoster: EmployeeRosterEntry[];
+  employeeRosterLoaded: boolean;
 }) {
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [search, setSearch] = useState('');
   const [selectedOrigin, setSelectedOrigin] = useState<SaleOrigin>('avulso');
   const [selectedProfessional, setSelectedProfessional] = useState('');
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [manualName, setManualName] = useState('');
   const [manualPrice, setManualPrice] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('dinheiro');
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [selectedCommandId, setSelectedCommandId] = useState('');
+  const [commandVersion, setCommandVersion] = useState('');
+  const [orderVersions, setOrderVersions] = useState<Record<string, string>>({});
+  const [appointmentVersions, setAppointmentVersions] = useState<Record<string, string>>({});
   const [includeServiceCharge, setIncludeServiceCharge] = useState(false);
   const origins: SaleOrigin[] = [
     ...(modules.agendamento ? ['agendamento' as const] : []),
@@ -557,9 +630,14 @@ function SalesTab({
     'avulso',
   ];
   const origin = origins.includes(selectedOrigin) ? selectedOrigin : origins[0];
-  const soldAppointments = new Set(register.sales.flatMap((sale) => sale.items.map((item) => item.sourceRecordId).filter((id): id is string => Boolean(id))));
-  const pendingOrders = orders.filter((order) => order.establishmentId === establishmentId && order.status === 'pending' && order.channel !== 'delivery' && !order.deliveryStatus);
-  const openCommands = commands.filter((command) => command.establishmentId === establishmentId && command.status === 'open');
+  const soldAppointments = new Set(register.sales.filter((sale) => sale.origin === 'agendamento' && sale.status !== 'cancelled')
+    .flatMap((sale) => sale.items.map((item) => item.sourceRecordId).filter((id): id is string => Boolean(id))));
+  const paidOrderIds = new Set(register.sales.filter((sale) => sale.status !== 'cancelled' && (sale.origin === 'cardapio' || sale.origin === 'delivery'))
+    .flatMap((sale) => sale.items.map((item) => item.sourceRecordId).filter((id): id is string => Boolean(id))));
+  const paidCommandIds = new Set(register.sales.filter((sale) => sale.status !== 'cancelled' && sale.commandId).map((sale) => sale.commandId));
+  const pendingOrders = orders.filter((order) => order.establishmentId === establishmentId && order.status === 'pending'
+    && order.channel !== 'delivery' && !order.deliveryStatus && !paidOrderIds.has(order.id));
+  const openCommands = commands.filter((command) => command.establishmentId === establishmentId && command.status === 'open' && !paidCommandIds.has(command.id));
   const selectedCommand = openCommands.find((command) => command.id === selectedCommandId);
   const catalog: SaleItem[] = origin === 'produto_estoque'
     ? products.map((product) => ({ productId: product.id, name: product.name, price: product.price, unitCost: product.unitCost, quantity: 1 }))
@@ -600,6 +678,9 @@ function SalesTab({
       toast.error('Este agendamento já está na venda atual'); return;
     }
     const appointment = item.sourceRecordId ? appointments.find((entry) => entry.id === item.sourceRecordId) : undefined;
+    if (origin === 'agendamento' && appointment) {
+      setAppointmentVersions((current) => ({ ...current, [appointment.id]: JSON.stringify(appointment) }));
+    }
     if (origin === 'agendamento' && appointment && professionals.some((professional) => professional.name === appointment.professional)) {
       setSelectedProfessional(appointment.professional);
     }
@@ -626,12 +707,16 @@ function SalesTab({
     setSearch('');
     setSelectedProfessional('');
     setSelectedCommandId('');
+    setCommandVersion('');
+    setOrderVersions({});
+    setAppointmentVersions({});
     setIncludeServiceCharge(false);
   };
 
   const addCommandToCart = (command: Command) => {
     if (!command.items.length) { toast.error(`A comanda ${command.number} não tem consumo registrado`); return; }
     setSelectedCommandId(command.id);
+    setCommandVersion(JSON.stringify(command));
     setIncludeServiceCharge(false);
     setCart(command.items);
   };
@@ -645,6 +730,7 @@ function SalesTab({
       sourceRecordId: order.id,
     }));
     setCart((current) => [...current, ...orderItems]);
+    setOrderVersions((current) => ({ ...current, [order.id]: JSON.stringify(order) }));
   };
 
   const addManualItem = () => {
@@ -657,6 +743,10 @@ function SalesTab({
   };
 
   const checkout = () => {
+    if (!employeeRosterLoaded) { toast.error('Aguarde o carregamento dos funcionários.'); return; }
+    if (selectedEmployeeId && !employeeRoster.some((employee) => employee.active && employee.id === selectedEmployeeId)) {
+      toast.error('Funcionário indisponível. Selecione novamente.'); return;
+    }
     if (!session) { toast.error('Abra o caixa antes de registrar vendas'); return; }
     if (!cart.length) { toast.error('Adicione produtos à venda'); return; }
     if (origin === 'agendamento' && !selectedProfessional) { toast.error('Selecione o profissional que realizou o serviço'); return; }
@@ -677,18 +767,45 @@ function SalesTab({
     setPaymentDialogOpen(true);
   };
 
-  const confirmPayment = (splits: PaymentSplit[], change: number) => {
-    if (!session) { toast.error('Abra o caixa antes de registrar vendas'); return; }
+  const confirmPayment = async (splits: PaymentSplit[], change: number) => {
+    if (!session) { toast.error('Abra o caixa antes de registrar vendas'); return false; }
+    let attribution: ReturnType<typeof employeeSaleAttribution>;
+    try {
+      attribution = employeeSaleAttribution(selectedEmployeeId, employeeRoster);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível registrar a comissão.');
+      return false;
+    }
     if (origin === 'produto_estoque' && cart.some((item) => {
       const product = products.find((entry) => entry.id === item.productId);
       return !product || product.stock < item.quantity;
     })) {
       toast.error('O estoque mudou. Revise as quantidades da venda');
       setPaymentDialogOpen(false);
-      return;
+      return false;
+    }
+    if (origin === 'cardapio' && cart.some((item) => item.sourceRecordId && !pendingOrders.some((order) => order.id === item.sourceRecordId))) {
+      toast.error('Um dos pedidos selecionados não está mais pendente.');
+      return false;
+    }
+    if (origin === 'cardapio' && cart.some((item) => item.sourceRecordId
+      && JSON.stringify(orders.find((order) => order.id === item.sourceRecordId)) !== orderVersions[item.sourceRecordId])) {
+      toast.error('Um dos pedidos foi alterado. Adicione-o novamente para conferir os valores.');
+      return false;
+    }
+    if (origin === 'comanda' && (!selectedCommand || JSON.stringify(selectedCommand) !== commandVersion)) {
+      toast.error('A comanda mudou. Selecione-a novamente para conferir os valores.');
+      return false;
+    }
+    if (origin === 'agendamento' && cart.some((item) => item.sourceRecordId
+      && (soldAppointments.has(item.sourceRecordId)
+        || JSON.stringify(appointments.find((appointment) => appointment.id === item.sourceRecordId)) !== appointmentVersions[item.sourceRecordId]))) {
+      toast.error('Um dos agendamentos mudou ou já foi cobrado. Adicione-o novamente.');
+      return false;
     }
     const sale: CashSale = {
       id: createId(), establishmentId, sessionId: session.id, createdAt: new Date().toISOString(),
+      ...attribution,
       items: origin === 'agendamento'
         ? cart.map((item) => ({ ...item, professional: selectedProfessional }))
         : cart.map((item) => ({ ...item })),
@@ -718,45 +835,43 @@ function SalesTab({
       occurredAt: sale.createdAt,
       summary: 'Pedido pago no caixa.',
     }));
-    setRegister((current) => relatedEvents.reduce(
+    const updatedRegister = relatedEvents.reduce(
       (updated, event) => appendAuditEvent(updated, event),
-      appendAuditEvent({ ...current, sales: [...current.sales, sale] }, auditEvent),
-    ));
-    if (origin === 'cardapio') {
-      const chargedOrders = new Set(cart.map((item) => item.sourceRecordId).filter((id): id is string => Boolean(id)));
-      setOrders((current) => current.map((order) => chargedOrders.has(order.id) ? { ...order, status: 'paid' } : order));
-    }
-    if (origin === 'agendamento') {
-      const chargedAppointments = new Set(cart.map((item) => item.sourceRecordId).filter((id): id is string => Boolean(id)));
-      setAppointments((current) => current.map((appointment) => chargedAppointments.has(appointment.id)
+      appendAuditEvent({ ...register, sales: [...register.sales, sale] }, auditEvent),
+    );
+    const chargedOrders = new Set(cart.map((item) => item.sourceRecordId).filter((id): id is string => Boolean(id)));
+    const updatedOrders: MenuOrder[] | undefined = origin === 'cardapio'
+      ? orders.map((order) => chargedOrders.has(order.id) ? { ...order, status: 'paid' } : order)
+      : undefined;
+    const updatedAppointments: Appointment[] | undefined = origin === 'agendamento' && chargedOrders.size > 0
+      ? appointments.map((appointment) => chargedOrders.has(appointment.id)
         ? { ...appointment, status: 'completed', paymentStatus: 'paid' }
-        : appointment));
-    }
-    if (origin === 'comanda' && selectedCommand) {
-      setCommands((current) => current.map((command) => command.id === selectedCommand.id ? { ...command, status: 'paid' } : command));
-    }
+        : appointment)
+      : undefined;
+    const updatedCommands: Command[] | undefined = origin === 'comanda' && selectedCommand
+      ? commands.map((command) => command.id === selectedCommand.id ? { ...command, status: 'paid' } : command)
+      : undefined;
     if (origin === 'produto_estoque') {
-      setProducts((current) => current.map((product) => {
+      const updatedProducts = products.map((product) => {
         const sold = cart.find((item) => item.productId === product.id);
         return sold ? { ...product, stock: product.stock - sold.quantity } : product;
-      }));
-      setInventoryMovements((current) => [
-        ...current,
-        ...sale.items.flatMap((item) => {
-          const product = products.find((entry) => entry.id === item.productId);
-          return product ? [{
-            id: createId(),
-            productId: product.id,
-            productName: product.name,
-            unit: product.unit,
-            type: 'sale' as const,
-            quantity: item.quantity,
-            createdAt: sale.createdAt,
-          }] : [];
-        }),
-      ]);
+      });
+      const movements = sale.items.flatMap((item) => {
+        const product = products.find((entry) => entry.id === item.productId);
+        return product ? [{
+          id: createId(), productId: product.id, productName: product.name, unit: product.unit,
+          type: 'sale' as const, quantity: item.quantity, createdAt: sale.createdAt,
+        }] : [];
+      });
+      if (!await commitSaleChange(updatedRegister, { stock: { products: updatedProducts, movements }, checkRoster: Boolean(attribution.employeeId), orders: updatedOrders })) return false;
+    } else {
+      if (!await commitSaleChange(updatedRegister, {
+        checkRoster: Boolean(attribution.employeeId), orders: updatedOrders,
+        appointments: updatedAppointments, commands: updatedCommands,
+      })) return false;
     }
-    setCart([]); setSelectedCommandId(''); setIncludeServiceCharge(false);
+    setCart([]); setSelectedCommandId(''); setCommandVersion(''); setOrderVersions({}); setAppointmentVersions({}); setIncludeServiceCharge(false);
+    setSelectedEmployeeId('');
     setPaymentMethod(splits[0].method);
     if (origin === 'agendamento') setSelectedProfessional('');
     toast.success(`Venda registrada${change ? ` · troco ${money(change)}` : ''}`);
@@ -768,6 +883,7 @@ function SalesTab({
       });
       if (lowStockNames.length) toast.warning(`Estoque baixo: ${lowStockNames.join(', ')}`);
     }
+    return true;
   };
 
   return (
@@ -851,6 +967,14 @@ function SalesTab({
 
         <Card className="flex flex-col p-4">
           <h3 className="mb-3 flex items-center gap-2 font-semibold"><Receipt className="h-4 w-4" />Venda atual ({cart.length})</h3>
+          {modules.employees && (
+            <label className="mb-3 space-y-1 text-sm font-medium">Funcionário responsável
+              <select value={selectedEmployeeId} onChange={(event) => setSelectedEmployeeId(event.target.value)} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm font-normal">
+                <option value="">Sem funcionário</option>
+                {employeeRoster.filter((employee) => employee.active).map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
+              </select>
+            </label>
+          )}
           <div className="mb-3 max-h-[255px] flex-1 space-y-2 overflow-y-auto">
             {cart.map((item) => (
               <div key={item.productId} className="flex items-center gap-2 rounded-md border p-2">
