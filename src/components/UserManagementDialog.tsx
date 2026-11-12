@@ -4,12 +4,14 @@ import { useApp } from '@/store';
 import { useAuth, type AppUser } from '@/auth/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Card } from '@/components/ui/card';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 
-export function UserManagementDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function UserManagementPanel() {
   const { establishments } = useApp();
   const { createUser, listUsers, deleteUser, user, authConfigured } = useAuth();
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -21,19 +23,23 @@ export function UserManagementDialog({ open, onClose }: { open: boolean; onClose
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<AppUser | null>(null);
+  const [loading, setLoading] = useState(true);
   const listVersion = useRef(0);
 
   useEffect(() => {
-    if (!open) return;
     let active = true;
     const version = ++listVersion.current;
     void listUsers().then((result) => {
       if (active && listVersion.current === version) setUsers(result);
     }).catch((reason: unknown) => {
       if (active && listVersion.current === version) setError(reason instanceof Error ? reason.message : 'Não foi possível carregar usuários.');
+    }).finally(() => {
+      if (active) setLoading(false);
     });
     return () => { active = false; };
-  }, [listUsers, open]);
+  }, [listUsers]);
 
   const toggleEstablishment = (id: string) => {
     setEstablishmentIds((current) => current.includes(id)
@@ -56,6 +62,7 @@ export function UserManagementDialog({ open, onClose }: { open: boolean; onClose
         establishmentIds,
       });
       setUsername(''); setEmail(''); setDisplayName(''); setPassword(''); setEstablishmentIds([]);
+      setCreateOpen(false);
       toast.success('Usuário criado com as permissões selecionadas.');
       try {
         ++listVersion.current;
@@ -87,10 +94,32 @@ export function UserManagementDialog({ open, onClose }: { open: boolean; onClose
   };
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div><h1 className="text-2xl font-bold">Usuários</h1><p className="text-sm text-muted-foreground">Gerencie os acessos às lojas.</p></div>
+        <Button type="button" onClick={() => { setError(''); setCreateOpen(true); }} disabled={creating || Boolean(removingId)}><UserPlus className="mr-2 h-4 w-4" />Novo usuário</Button>
+      </div>
+      {error && !createOpen && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <Card className="p-5">
+        <h2 className="mb-2 font-semibold">Usuários cadastrados</h2>
+        <div className="divide-y">
+          {users.map((item) => (
+            <div key={item.id} className="flex items-center gap-3 py-2">
+              <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.displayName}</p><p className="text-xs text-muted-foreground">@{item.username} · {item.establishmentIds.length} loja(s)</p></div>
+              {removingId === item.id && <span role="status" className="text-xs text-muted-foreground">Excluindo...</span>}
+              <Button type="button" variant="ghost" size="icon" className="text-destructive" disabled={creating || Boolean(removingId)} onClick={() => setRemoveTarget(item)} aria-label={`Excluir usuário ${item.username}`}>
+                {removingId === item.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" />}
+              </Button>
+            </div>
+          ))}
+          {loading && <p role="status" className="py-3 text-sm text-muted-foreground">Carregando usuários...</p>}
+          {!loading && !error && !users.length && <p className="py-3 text-sm text-muted-foreground">Nenhum usuário comum criado.</p>}
+        </div>
+      </Card>
+    <Dialog open={createOpen} onOpenChange={(nextOpen) => { if (!creating) setCreateOpen(nextOpen); }}>
       <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><UserPlus className="h-5 w-5 text-primary" />Usuários e permissões</DialogTitle>
+          <DialogTitle className="flex items-center gap-2"><UserPlus className="h-5 w-5 text-primary" />Criar usuário</DialogTitle>
           <DialogDescription>
             Contas comuns só poderão acessar os estabelecimentos selecionados. {authConfigured && !user?.isDemo ? 'Gerenciado pelo Supabase Auth.' : 'Armazenado localmente neste navegador para demonstração.'}
           </DialogDescription>
@@ -122,22 +151,17 @@ export function UserManagementDialog({ open, onClose }: { open: boolean; onClose
             </Button>
           </DialogFooter>
         </form>
-        <div className="border-t pt-4">
-          <h3 className="mb-2 text-sm font-semibold">Usuários cadastrados</h3>
-          <div className="divide-y">
-            {users.map((item) => (
-              <div key={item.id} className="flex items-center gap-3 py-2">
-                <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.displayName}</p><p className="text-xs text-muted-foreground">@{item.username} · {item.establishmentIds.length} loja(s)</p></div>
-                {removingId === item.id && <span role="status" className="text-xs text-muted-foreground">Excluindo...</span>}
-                <Button type="button" variant="ghost" size="icon" className="text-destructive" disabled={creating || Boolean(removingId)} onClick={() => void remove(item.id)} aria-label={`Excluir usuário ${item.username}`}>
-                  {removingId === item.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" />}
-                </Button>
-              </div>
-            ))}
-            {!users.length && <p className="py-3 text-sm text-muted-foreground">Nenhum usuário comum criado.</p>}
-          </div>
-        </div>
       </DialogContent>
     </Dialog>
+    <AlertDialog open={Boolean(removeTarget)} onOpenChange={(open) => { if (!open) setRemoveTarget(null); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Excluir usuário?</AlertDialogTitle>
+          <AlertDialogDescription>Deseja excluir {removeTarget?.displayName} (@{removeTarget?.username})? Esta ação remove a conta e não pode ser desfeita.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => { if (removeTarget) void remove(removeTarget.id); }}>Excluir usuário</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </div>
   );
 }

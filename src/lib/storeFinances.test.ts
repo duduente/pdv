@@ -7,7 +7,7 @@ import {
   getBillPaymentOptions,
   type FinanceBill,
 } from './storeFinances';
-import { ensureAdminMonthlyBill } from './adminBilling';
+import { ensureAdminMonthlyBill, ensureNextAdminMonthlyBill } from './adminBilling';
 
 describe('finanças da loja', () => {
   it('creates the next monthly bill from the recurring bill details', () => {
@@ -158,7 +158,7 @@ describe('finanças da loja', () => {
     expect(updated.bills[1].dueDate).toBe('2027-02-28');
   });
 
-  it('generates the Kito bill with boleto and Pix payment options', () => {
+  it('generates a Kito bill without carrying old payment codes forward', () => {
     const configured = {
       ...EMPTY_STORE_FINANCES,
       recurring: {
@@ -178,19 +178,16 @@ describe('finanças da loja', () => {
       amount: 249.9,
       dueDate: '2026-11-15',
       paymentType: 'boleto',
-      boletoCode: 'boleto-code',
-      pixCode: 'pix@example.com',
+      boletoCode: '',
+      pixCode: '',
       recurringMonth: '2026-11',
     });
-    expect(getBillPaymentOptions(generated.bills[0])).toEqual([
-      { type: 'boleto', code: 'boleto-code' },
-      { type: 'pix', code: 'pix@example.com' },
-    ]);
+    expect(getBillPaymentOptions(generated.bills[0])).toEqual([]);
     expect(configured.bills).toHaveLength(0);
     expect(configured.recurring.amount).toBe(249.9);
   });
 
-  it('updates current fixed monthly billing when admin changes the payment options', () => {
+  it('preserves existing monthly payment options when generating again', () => {
     const original = {
       ...EMPTY_STORE_FINANCES,
       recurring: { enabled: true, dueDay: 10, amount: 100, boletoCode: 'old-boleto' },
@@ -203,11 +200,25 @@ describe('finanças da loja', () => {
     const updatedBill = ensureAdminMonthlyBill(updatedSettings, 125, new Date(2026, 10, 10), () => 'duplicate-bill');
 
     expect(updatedBill.bills).toHaveLength(1);
-    expect(updatedBill.bills[0]).toMatchObject({
-      amount: 125,
-      boletoCode: 'new-boleto',
-      pixCode: 'new-pix',
-    });
+    expect(updatedBill.bills[0]).toEqual(first.bills[0]);
+  });
+
+  it('creates exactly one next monthly bill without reusing payment codes', () => {
+    const original = {
+      ...EMPTY_STORE_FINANCES,
+      recurring: { enabled: true, dueDay: 31, amount: 100, boletoCode: 'old', pixCode: 'old-pix' },
+    };
+    const generated = ensureAdminMonthlyBill(original, 100, new Date(2026, 0, 1), () => 'jan');
+    const paid = { ...generated.bills[0], boletoCode: 'old', pixCode: 'old-pix', paidAt: '2026-01-15T00:00:00Z' };
+    const result = ensureNextAdminMonthlyBill({ ...generated, bills: [paid] }, paid, () => 'feb');
+    expect(result.bills).toHaveLength(2);
+    expect(result.bills[0]).toEqual(paid);
+    expect(result.bills[1]).toMatchObject({ recurringMonth: '2026-02', dueDate: '2026-02-28', boletoCode: '', pixCode: '' });
+    expect(ensureNextAdminMonthlyBill(result, paid, () => 'duplicate')).toBe(result);
+    expect(ensureNextAdminMonthlyBill(result, { ...paid, paidAt: undefined }, () => 'duplicate')).toBe(result);
+    const december = { ...paid, recurringMonth: '2026-12', dueDate: '2026-12-31' };
+    const newYear = ensureNextAdminMonthlyBill({ ...original, bills: [december] }, december, () => 'new-year');
+    expect(newYear.bills[1]).toMatchObject({ recurringMonth: '2027-01', dueDate: '2027-01-31' });
   });
 
   it('shows paid, overdue, due today, due soon, expired and upcoming bill states', () => {

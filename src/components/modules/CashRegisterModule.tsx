@@ -175,7 +175,7 @@ type SaleChanges = {
   appointments?: Appointment[];
 };
 
-export function CashRegisterModule() {
+export function CashRegisterModule({ mode = 'cash' }: { mode?: 'cash' | 'reports' }) {
   const { selectedEstablishment } = useApp();
   const { user } = useAuth();
   const establishmentId = selectedEstablishment?.id ?? 'default';
@@ -193,9 +193,10 @@ export function CashRegisterModule() {
   const [menuItems] = usePersistentState<MenuItem[]>(
     `menu-items:${establishmentId}`,
     selectedEstablishment?.modules.cardapio && selectedEstablishment.slug === 'burger-house' ? initialMenuItems : [],
+    { readOnly: true },
   );
   const [orders, setOrders, ordersLoaded, ordersSnapshot] = usePersistentState<MenuOrder[]>(`menu-orders:${establishmentId}`, [], { readOnly: !canViewSales });
-  const [drivers] = usePersistentState<DeliveryDriver[]>(`delivery-drivers:${establishmentId}`, []);
+  const [drivers] = usePersistentState<DeliveryDriver[]>(`delivery-drivers:${establishmentId}`, [], { readOnly: true });
   const [employeeRoster, , employeeRosterLoaded, rosterSnapshot] = usePersistentState<EmployeeRosterEntry[]>(
     `employee-roster:${establishmentId}`, [], { readOnly: true },
   );
@@ -213,18 +214,19 @@ export function CashRegisterModule() {
   const [services] = usePersistentState<Service[]>(
     `services:${establishmentId}`,
     selectedEstablishment?.modules.agendamento && selectedEstablishment.slug === 'barbearia-estilo' ? initialServices : [],
+    { readOnly: true },
   );
   const [professionals] = usePersistentState<Professional[]>(
     `professionals:${establishmentId}`,
     selectedEstablishment?.modules.agendamento && selectedEstablishment.slug === 'barbearia-estilo' ? initialProfessionals : [],
+    { readOnly: true },
   );
   const [appointments, setAppointments, appointmentsLoaded, appointmentsSnapshot] = usePersistentState<Appointment[]>(
     `appointments:${establishmentId}`,
     selectedEstablishment?.modules.agendamento && selectedEstablishment.slug === 'barbearia-estilo' ? initialAppointments : [],
     { readOnly: !canViewSales },
   );
-  const [tab, setTab] = useState(() => canViewReports ? 'reports'
-    : canViewSales ? 'sales'
+  const [tab, setTab] = useState(() => canViewSales ? 'sales'
       : canViewMovements ? 'movements'
         : 'session');
   const activeSession = register.sessions.find((session) => session.id === register.activeSessionId) ?? null;
@@ -411,6 +413,11 @@ export function CashRegisterModule() {
   if (!selectedEstablishment) return null;
   if (!registerLoaded || !productsLoaded || !movementsLoaded || !ordersLoaded || !commandsLoaded || !appointmentsLoaded) return <p>Carregando dados do caixa...</p>;
 
+  if (mode === 'reports') {
+    if (!canViewReports) return null;
+    return <ReportsTab establishmentName={selectedEstablishment.name} sales={register.sales} movements={register.movements} expenses={register.expenses ?? []} auditEvents={register.auditEvents ?? []} orders={orders} drivers={drivers} canManageSales={canViewSales} onCancelSale={cancelSale} onDeleteSale={deleteSale} />;
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -430,14 +437,11 @@ export function CashRegisterModule() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex h-auto flex-wrap justify-start">
-          {canViewReports && <TabsTrigger value="dashboard">Dashboard</TabsTrigger>}
           {canViewSales && <TabsTrigger value="sales">Vendas</TabsTrigger>}
           {canViewMovements && <TabsTrigger value="movements">Movimentações e extratos</TabsTrigger>}
-          {canViewReports && <TabsTrigger value="reports">Relatórios</TabsTrigger>}
           {(canViewSales || canViewReports) && <TabsTrigger value="history">Histórico</TabsTrigger>}
           {canViewSessions && <TabsTrigger value="session">Abertura e fechamento</TabsTrigger>}
         </TabsList>
-        {canViewReports && <TabsContent value="dashboard" className="mt-4"><DashboardTab sales={register.sales} movements={register.movements} expenses={register.expenses ?? []} /></TabsContent>}
         {canViewSales && <TabsContent value="sales" className="mt-4">
           <SalesTab
             establishmentId={establishmentId}
@@ -460,7 +464,6 @@ export function CashRegisterModule() {
         {canViewMovements && <TabsContent value="movements" className="mt-4">
           <MovementsTab establishmentId={establishmentId} session={activeSession} register={register} setRegister={setRegister} user={user} />
         </TabsContent>}
-        {canViewReports && <TabsContent value="reports" className="mt-4"><ReportsTab establishmentName={selectedEstablishment.name} sales={register.sales} movements={register.movements} expenses={register.expenses ?? []} auditEvents={register.auditEvents ?? []} orders={orders} drivers={drivers} canManageSales={canViewSales} onCancelSale={cancelSale} onDeleteSale={deleteSale} /></TabsContent>}
         {(canViewSales || canViewReports) && <TabsContent value="history" className="mt-4"><AuditHistory events={register.auditEvents ?? []} /></TabsContent>}
         {canViewSessions && <TabsContent value="session" className="mt-4">
           <CashSessionTab establishmentId={establishmentId} register={register} setRegister={setRegister} activeSession={activeSession} user={user} />
@@ -538,52 +541,6 @@ function SourceBreakdown({ sales }: { sales: CashSale[] }) {
           .reduce((sum, sale) => sum + sale.total, 0);
         return <Metric key={origin} icon={Receipt} label={SOURCE_LABELS[origin]} value={money(total)} />;
       })}
-    </div>
-  );
-}
-
-function DashboardTab({ sales, movements, expenses }: {
-  sales: CashSale[];
-  movements: CashMovement[];
-  expenses: CashExpense[];
-}) {
-  const [period, setPeriod] = useState<Period>('day');
-  const [referenceDate, setReferenceDate] = useState(() => dateKey(new Date()));
-  const selectedSales = sales.filter((sale) => sale.status !== 'cancelled' && isDateInReportPeriod(sale.createdAt, period, referenceDate));
-  const selectedMovements = movements.filter((movement) => !movement.cancelledAt && isDateInReportPeriod(movement.createdAt, period, referenceDate));
-  const selectedExpenses = expenses.filter((expense) => !expense.cancelledAt && isDateInReportPeriod(expense.createdAt, period, referenceDate));
-  const summary = summarize(selectedSales);
-  const profit = calculateProfitSummary(selectedSales, selectedExpenses);
-  const supplies = selectedMovements.filter((movement) => movement.type === 'supply').reduce((sum, movement) => sum + movement.amount, 0);
-  const withdrawals = selectedMovements.filter((movement) => movement.type === 'withdrawal').reduce((sum, movement) => sum + movement.amount, 0);
-
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h2 className="text-lg font-semibold">Resumo do caixa</h2><p className="text-sm text-muted-foreground">{PERIOD_LABELS[period]} · {periodDescription(period, referenceDate)}</p></div>
-        <PeriodSelector value={period} onChange={setPeriod} referenceDate={referenceDate} onReferenceDateChange={setReferenceDate} />
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric icon={DollarSign} label={`Vendas · ${PERIOD_LABELS[period]}`} value={money(summary.total)} />
-        <Metric icon={Receipt} label="Vendas registradas" value={String(summary.count)} />
-        <Metric icon={TrendingUp} label="Ticket médio" value={money(summary.average)} />
-        <Metric icon={Wallet} label="Suprimentos · sangrias" value={`${money(supplies)} · ${money(withdrawals)}`} />
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric icon={TrendingUp} label="Lucro estimado" value={money(profit.estimatedProfit)} />
-        <Metric icon={DollarSign} label="Custo conhecido dos produtos" value={money(profit.knownProductCost)} />
-        <Metric icon={Wallet} label="Despesas registradas" value={money(profit.expenseTotal)} />
-        <Metric icon={BarChart3} label="Margem estimada" value={`${profit.marginPercent.toFixed(2)}%`} />
-      </div>
-      {profit.itemsWithoutCost > 0 && (
-        <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-          Estimativa parcial: {profit.itemsWithoutCost} linha(s) de venda no período sem custo cadastrado. Cadastre os custos no Estoque ou no Cardápio para melhorar o resultado. O cálculo não inclui impostos, taxas de pagamento ou folha.
-        </p>
-      )}
-      <p className="text-xs text-muted-foreground">Lucro e margem são estimativas: incluem custos cadastrados e despesas lançadas, mas não incluem impostos, tarifas de pagamento ou folha.</p>
-      <Card className="p-5"><div className="mb-4 flex items-center gap-2"><BarChart3 className="h-4 w-4 text-primary" /><h3 className="font-semibold">Faturamento por forma de pagamento</h3></div><PaymentBreakdown sales={selectedSales} /></Card>
-      <Card className="space-y-4 p-5"><h3 className="font-semibold">Faturamento por origem</h3><SourceBreakdown sales={selectedSales} /></Card>
-      {!selectedSales.length && <p className="py-5 text-center text-sm text-muted-foreground">Ainda não há vendas neste período.</p>}
     </div>
   );
 }

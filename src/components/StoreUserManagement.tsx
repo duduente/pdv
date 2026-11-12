@@ -7,6 +7,7 @@ import { STORE_PERMISSIONS } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 
 const PERMISSION_LABELS: Record<AppPermission, string> = {
@@ -18,7 +19,7 @@ const PERMISSION_LABELS: Record<AppPermission, string> = {
   delivery: 'Delivery',
   'pdv-sales': 'Caixa · Vendas',
   'pdv-movements': 'Caixa · Movimentações e extratos',
-  'pdv-reports': 'Caixa · Relatórios',
+  'pdv-reports': 'Relatórios · Caixa',
   'pdv-sessions': 'Caixa · Abertura e fechamento',
   finance: 'Finanças · Boletos e mensalidades',
   'store-settings': 'Configurações da loja',
@@ -58,6 +59,7 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<AppUser | null>(null);
   const listVersion = useRef(0);
 
   useEffect(() => {
@@ -124,7 +126,6 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
 
   const remove = async (target: AppUser) => {
     if (creating || removingId) return;
-    if (!window.confirm(`Remover ${target.displayName} desta loja?`)) return;
     setError('');
     setRemovingId(target.id);
     try {
@@ -208,7 +209,7 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
                   </p>
                 </div>
                 {removingId === item.id && <span role="status" className="text-xs text-muted-foreground">Removendo...</span>}
-                <Button type="button" variant="ghost" size="icon" className="text-destructive" disabled={creating || Boolean(removingId)} onClick={() => void remove(item)} aria-label={`Remover ${item.username}`}>
+                <Button type="button" variant="ghost" size="icon" className="text-destructive" disabled={creating || Boolean(removingId)} onClick={() => setRemoveTarget(item)} aria-label={`Remover ${item.username}`}>
                   {removingId === item.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" />}
                 </Button>
               </div>
@@ -217,6 +218,15 @@ export function StoreUserManagement({ establishment }: { establishment: Establis
           {!users.length && <p className="py-3 text-sm text-muted-foreground">Nenhum subusuário cadastrado nesta loja.</p>}
         </div>
       </div>
+      <AlertDialog open={Boolean(removeTarget)} onOpenChange={(open) => { if (!open) setRemoveTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remover acesso?</AlertDialogTitle>
+            <AlertDialogDescription>Deseja remover o acesso de {removeTarget?.displayName} (@{removeTarget?.username}) à loja {establishment.name}? Se esta for a última loja do usuário, a conta também será excluída.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => { if (removeTarget) void remove(removeTarget); }}>Remover acesso</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

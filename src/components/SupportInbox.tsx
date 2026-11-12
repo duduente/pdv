@@ -11,6 +11,8 @@ import { cn } from '@/lib/utils';
 import {
   addSupportMessage,
   closeSupportConversation,
+  getSupportSeenThrough,
+  getUnreadSupportCount,
   listSupportConversations,
   markSupportConversationSeen,
   setSupportAdminTyping,
@@ -38,7 +40,7 @@ function playAlert() {
   oscillator.onended = () => { void context.close(); };
 }
 
-export function SupportInbox() {
+export function SupportInbox({ active, onUnreadCountChange }: { active: boolean; onUnreadCountChange: (count: number) => void }) {
   const { user } = useAuth();
   const [conversations, setConversations] = useState<SupportConversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -47,7 +49,8 @@ export function SupportInbox() {
   const [closing, setClosing] = useState(false);
   const alertInterval = useRef<number | null>(null);
   const loadErrorShown = useRef(false);
-  const enteredConversationId = useRef<string | null>(null);
+  const seenErrorShown = useRef(false);
+  const seenAttempt = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!user || user.role !== 'super-admin') return;
@@ -77,14 +80,13 @@ export function SupportInbox() {
     };
   }, [refresh, user]);
 
-  const unreadHumanThreads = useMemo(() => conversations.filter((conversation) =>
-    conversation.humanRequestedAt && !conversation.closedAt
-    && (!conversation.adminSeenAt || Date.parse(conversation.adminSeenAt) < Date.parse(conversation.humanRequestedAt)),
-  ), [conversations]);
+  const unreadHumanThreads = useMemo(() => conversations.filter((conversation) => getUnreadSupportCount(conversation) > 0), [conversations]);
+  const unreadCount = useMemo(() => conversations.reduce((total, conversation) => total + getUnreadSupportCount(conversation), 0), [conversations]);
   const selected = conversations.find((conversation) => conversation.id === selectedId) ?? null;
   const selectedConversationId = selected?.id ?? null;
   const selectedClosedAt = selected?.closedAt ?? null;
   const isDrafting = Boolean(draft.trim());
+  useEffect(() => { onUnreadCountChange(unreadCount); }, [onUnreadCountChange, unreadCount]);
 
   useEffect(() => {
     if (alertInterval.current !== null) window.clearInterval(alertInterval.current);
@@ -99,23 +101,34 @@ export function SupportInbox() {
   }, [unreadHumanThreads.length]);
 
   useEffect(() => {
-    if (!selectedConversationId) {
-      enteredConversationId.current = null;
+    if (!active || !selected || !selectedConversationId || !selected.humanRequestedAt || selected.closedAt) {
+      seenAttempt.current = null;
       return;
     }
-    if (!user || enteredConversationId.current === selectedConversationId) return;
-    enteredConversationId.current = selectedConversationId;
+    if (!user) return;
+    const seenThrough = getSupportSeenThrough(selected);
+    const attempt = `${selectedConversationId}:${seenThrough}`;
+    if (seenAttempt.current === attempt) return;
+    seenAttempt.current = attempt;
     void markSupportConversationSeen({
       isDemo: Boolean(user.isDemo),
       conversationId: selectedConversationId,
-    }).then(() => void refresh()).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : 'Não foi possível marcar a conversa como lida.');
+      seenThrough,
+    }).then(() => {
+      seenErrorShown.current = false;
+      void refresh();
+    }).catch((error: unknown) => {
+      if (seenAttempt.current === attempt) seenAttempt.current = null;
+      if (!seenErrorShown.current) {
+        toast.error(error instanceof Error ? error.message : 'Não foi possível marcar a conversa como lida.');
+        seenErrorShown.current = true;
+      }
     });
-  }, [refresh, selectedConversationId, user]);
+  }, [active, refresh, selected, selectedConversationId, user]);
 
   useEffect(() => {
-    if (!user || !selectedConversationId || selectedClosedAt || !isDrafting) return;
-    let active = true;
+    if (!active || !user || !selectedConversationId || selectedClosedAt || !isDrafting) return;
+    let mounted = true;
     let errorShown = false;
     const updateTyping = async () => {
       try {
@@ -126,7 +139,7 @@ export function SupportInbox() {
         });
         errorShown = false;
       } catch (error) {
-        if (active && !errorShown) {
+        if (mounted && !errorShown) {
           toast.error(error instanceof Error ? error.message : 'Não foi possível atualizar o status de digitação.');
           errorShown = true;
         }
@@ -135,7 +148,7 @@ export function SupportInbox() {
     void updateTyping();
     const intervalId = window.setInterval(() => void updateTyping(), 5000);
     return () => {
-      active = false;
+      mounted = false;
       window.clearInterval(intervalId);
       void setSupportAdminTyping({
         isDemo: Boolean(user.isDemo),
@@ -145,7 +158,7 @@ export function SupportInbox() {
         toast.error(error instanceof Error ? error.message : 'Não foi possível atualizar o status de digitação.');
       });
     };
-  }, [isDrafting, selectedClosedAt, selectedConversationId, user]);
+  }, [active, isDrafting, selectedClosedAt, selectedConversationId, user]);
 
   if (!user || user.role !== 'super-admin') return null;
 
@@ -198,7 +211,7 @@ export function SupportInbox() {
           <p className="text-sm text-muted-foreground">Converse com usuários que solicitaram ajuda humana.</p>
         </div>
         <Badge variant={unreadHumanThreads.length ? 'destructive' : 'secondary'}>
-          {unreadHumanThreads.length ? `${unreadHumanThreads.length} aguardando` : `${conversations.filter((item) => item.humanRequestedAt && !item.closedAt).length} atendimentos ativos`}
+          {unreadCount ? `${unreadCount} não lida(s)` : `${conversations.filter((item) => item.humanRequestedAt && !item.closedAt).length} atendimentos ativos`}
         </Badge>
       </div>
       <div className="grid min-h-[22rem] md:grid-cols-[minmax(13rem,0.8fr)_minmax(0,1.5fr)]">

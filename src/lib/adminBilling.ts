@@ -1,7 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import {
   EMPTY_STORE_FINANCES,
-  ensureCurrentRecurringBill,
+  type FinanceBill,
   type StoreFinances,
 } from '@/lib/storeFinances';
 
@@ -49,8 +49,31 @@ export function ensureAdminMonthlyBill(
   referenceDate: Date,
   createId: () => string,
 ) {
-  return ensureCurrentRecurringBill({
-    ...billing,
-    recurring: { ...billing.recurring, enabled: true, amount: monthlyAmount },
-  }, referenceDate, createId);
+  if (!billing.recurring.enabled) return billing;
+  const month = `${referenceDate.getFullYear()}-${String(referenceDate.getMonth() + 1).padStart(2, '0')}`;
+  if (billing.bills.some((bill) => bill.recurringMonth === month)) return billing;
+  const lastDay = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + 1, 0).getDate();
+  const day = Math.min(Math.max(billing.recurring.dueDay, 1), lastDay);
+  const dueDate = `${month}-${String(day).padStart(2, '0')}`;
+  const bill: FinanceBill = {
+    id: createId(),
+    description: billing.recurring.description?.trim() || 'Mensalidade recorrente',
+    amount: monthlyAmount,
+    dueDate,
+    boletoCode: '',
+    pixCode: '',
+    paymentType: 'boleto',
+    validUntil: '',
+    recurringMonth: month,
+  };
+  return { ...billing, bills: [...billing.bills, bill] };
+}
+
+export function ensureNextAdminMonthlyBill(billing: StoreFinances, paidBill: FinanceBill, createId: () => string) {
+  if (!paidBill.paidAt || !paidBill.recurringMonth || !billing.recurring.enabled) return billing;
+  const [year, month] = paidBill.recurringMonth.split('-').map(Number);
+  if (!/^\d{4}-\d{2}$/.test(paidBill.recurringMonth) || !year || month < 1 || month > 12) {
+    throw new Error('Mês da mensalidade inválido.');
+  }
+  return ensureAdminMonthlyBill(billing, billing.recurring.amount, new Date(year, month, 1), createId);
 }

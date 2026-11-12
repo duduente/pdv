@@ -71,7 +71,7 @@ it('commits a stock sale, movement and employee commission together', async () =
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => { root.render(<CashRegisterModule />); });
+  await act(async () => { root.render(<CashRegisterModule mode={fixtures.tab === 'reports' ? 'reports' : 'cash'} />); });
   const origin = [...container.querySelectorAll('select')].find((item) => [...item.options].some((option) => option.value === 'produto_estoque'));
   expect(origin).toBeDefined();
   await act(async () => {
@@ -115,7 +115,7 @@ async function renderCash() {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => { root.render(<CashRegisterModule />); });
+  await act(async () => { root.render(<CashRegisterModule mode={fixtures.tab === 'reports' ? 'reports' : 'cash'} />); });
   return { container, cleanup: async () => { await act(async () => root.unmount()); container.remove(); } };
 }
 

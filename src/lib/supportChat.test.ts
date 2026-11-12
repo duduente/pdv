@@ -3,6 +3,8 @@ import {
   appendSupportMessage,
   getKitoAnswer,
   getSupportAttachmentMimeType,
+  getSupportSeenThrough,
+  getUnreadSupportCount,
   KITO_RESPONSE_DELAY_MS,
   isSupportConversationExpired,
   SUPPORT_ATTACHMENT_MAX_BYTES,
@@ -11,6 +13,42 @@ import {
   type SupportConversation,
   type SupportMessage,
 } from './supportChat';
+
+describe('unread human support', () => {
+  const requested = '2026-11-09T12:00:00.000Z';
+  const message = (id: string, sender: SupportMessage['sender'], createdAt: string): SupportMessage => ({
+    id, sender, createdAt, senderId: id, senderName: id, body: id, attachment: null,
+  });
+  const conversation: SupportConversation = {
+    id: 'conversation', establishmentId: 'store', establishmentName: 'Loja',
+    userId: 'user', userName: 'Cliente', humanRequestedAt: requested,
+    adminSeenAt: null, adminJoinedAt: null, adminTypingAt: null, closedAt: null,
+    createdAt: requested, updatedAt: requested,
+    messages: [
+      message('old', 'merchant', '2026-11-09T11:59:59.000Z'),
+      message('first', 'merchant', '2026-11-09T12:00:01.000Z'),
+      message('admin', 'admin', '2026-11-09T12:00:02.000Z'),
+      message('ai', 'ai', '2026-11-09T12:00:03.000Z'),
+      message('second', 'merchant', '2026-11-09T12:00:04.000Z'),
+    ],
+  };
+
+  it('counts only merchant messages after the request and the read cursor', () => {
+    expect(getUnreadSupportCount(conversation)).toBe(2);
+    expect(getUnreadSupportCount({ ...conversation, adminSeenAt: '2026-11-09T12:00:01.000Z' })).toBe(1);
+    expect(getSupportSeenThrough(conversation)).toBe('2026-11-09T12:00:04.000Z');
+    expect(getUnreadSupportCount({ ...conversation, adminSeenAt: getSupportSeenThrough(conversation) })).toBe(0);
+  });
+
+  it('signals an unseen request without new messages and ignores closed or bot-only chats', () => {
+    const request = { ...conversation, messages: [conversation.messages[0]] };
+    expect(getUnreadSupportCount(request)).toBe(1);
+    expect(getSupportSeenThrough(request)).toBe(requested);
+    expect(getUnreadSupportCount({ ...request, adminSeenAt: requested })).toBe(0);
+    expect(getUnreadSupportCount({ ...conversation, closedAt: requested })).toBe(0);
+    expect(getUnreadSupportCount({ ...conversation, humanRequestedAt: null })).toBe(0);
+  });
+});
 
 describe('getKitoAnswer', () => {
   it('does not append a message twice when local sync races the optimistic update', () => {
@@ -103,7 +141,7 @@ describe('getKitoAnswer', () => {
 
   it('understands common informal wording and filler words without losing the intent', () => {
     expect(getKitoAnswer('Queria dar uma olhada no que entrou hoje')).toContain('Dashboard');
-    expect(getKitoAnswer('Como faço pra puxar o relatório?')).toContain('Frente de Caixa');
+    expect(getKitoAnswer('Como faço pra puxar o relatório?')).toContain('Relatórios');
     expect(getKitoAnswer('Chegou mercadoria, como boto no sistema?')).toContain('Estoque');
     expect(getKitoAnswer('Como mexo no preço do item?')).toContain('Cardápio');
     expect(getKitoAnswer('Quero colocar dinheiro no caixa')).toContain('Movimentações e extratos');

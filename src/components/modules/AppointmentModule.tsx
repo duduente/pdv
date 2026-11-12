@@ -49,7 +49,6 @@ export function AppointmentModule() {
           <TabsTrigger value="services">Serviços</TabsTrigger>
           <TabsTrigger value="pros">Profissionais</TabsTrigger>
           <TabsTrigger value="calendar">Agendamentos</TabsTrigger>
-          <TabsTrigger value="reports">Relatório</TabsTrigger>
         </TabsList>
 
         <TabsContent value="config" className="mt-4">
@@ -63,9 +62,6 @@ export function AppointmentModule() {
         </TabsContent>
         <TabsContent value="calendar" className="mt-4">
           <CalendarTab />
-        </TabsContent>
-        <TabsContent value="reports" className="mt-4">
-          <ProfessionalRevenueTab />
         </TabsContent>
       </Tabs>
     </div>
@@ -83,7 +79,7 @@ function getRevenuePeriodStart(period: RevenuePeriod) {
   return today;
 }
 
-function ProfessionalRevenueTab() {
+export function ProfessionalRevenueTab() {
   const { selectedEstablishment } = useApp();
   const establishmentId = selectedEstablishment?.id ?? 'default';
   const isBarbershop = selectedEstablishment?.slug === 'barbearia-estilo';

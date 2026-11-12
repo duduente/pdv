@@ -3,7 +3,7 @@ import {
   Building2, Users, DollarSign, TrendingUp, Search, MoreVertical,
   ExternalLink, Pencil, Copy, CalendarClock, UtensilsCrossed,
   Calculator, Package, Star, Activity, Plus, Trash2, ClipboardList, Bike,
-  WalletCards, Store,
+  WalletCards, Store, Headphones,
 } from 'lucide-react';
 import { useApp } from '@/store';
 import { MODULE_LABELS, formatCurrency } from '@/mockData';
@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
-import { UserManagementDialog } from '@/components/UserManagementDialog';
+import { UserManagementPanel } from '@/components/UserManagementDialog';
 import { SupportInbox } from '@/components/SupportInbox';
 import { AdminBillingPanel } from '@/components/modules/AdminBillingPanel';
 
@@ -46,8 +46,8 @@ export function SuperAdminPanel() {
   const [editTarget, setEditTarget] = useState<Establishment | null>(null);
   const [monthlyRevenueTarget, setMonthlyRevenueTarget] = useState<Establishment | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const [usersOpen, setUsersOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'stores' | 'finances'>('stores');
+  const [activeTab, setActiveTab] = useState<'stores' | 'finances' | 'users' | 'support'>('stores');
+  const [unreadSupport, setUnreadSupport] = useState(0);
 
   const filtered = establishments.filter(
     (e) =>
@@ -91,7 +91,6 @@ export function SuperAdminPanel() {
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 animate-fade-in sm:px-6 lg:px-8">
-      <SupportInbox />
       <div className="flex flex-wrap gap-2 border-b pb-3" role="tablist" aria-label="Painel Super Admin">
         <Button type="button" role="tab" aria-selected={activeTab === 'stores'} variant={activeTab === 'stores' ? 'default' : 'outline'} onClick={() => setActiveTab('stores')}>
           <Store className="mr-2 h-4 w-4" />Lojas
@@ -99,13 +98,23 @@ export function SuperAdminPanel() {
         <Button type="button" role="tab" aria-selected={activeTab === 'finances'} variant={activeTab === 'finances' ? 'default' : 'outline'} onClick={() => setActiveTab('finances')}>
           <WalletCards className="mr-2 h-4 w-4" />Finanças do Kito
         </Button>
+        <Button type="button" role="tab" aria-selected={activeTab === 'users'} variant={activeTab === 'users' ? 'default' : 'outline'} onClick={() => setActiveTab('users')}>
+          <Users className="mr-2 h-4 w-4" />Usuários
+        </Button>
+        <Button type="button" role="tab" aria-selected={activeTab === 'support'} variant={activeTab === 'support' ? 'default' : 'outline'} onClick={() => setActiveTab('support')}>
+          <Headphones className="mr-2 h-4 w-4" />Suporte
+          {unreadSupport > 0 && <span aria-label={`${unreadSupport} notificações de suporte não lidas`} className="ml-2 rounded-full bg-red-600 px-2 py-0.5 text-xs font-bold text-white">{unreadSupport}</span>}
+        </Button>
       </div>
-      {activeTab === 'finances' ? (
+      <div hidden={activeTab !== 'support'}><SupportInbox active={activeTab === 'support'} onUnreadCountChange={setUnreadSupport} /></div>
+      {activeTab === 'users' && <UserManagementPanel />}
+      {activeTab === 'finances' && (
         <AdminBillingPanel
           establishments={establishments}
           onUpdateMonthlyRevenue={(id, monthlyRevenue) => updateEstablishment(id, { monthlyRevenue })}
         />
-      ) : (
+      )}
+      {activeTab === 'stores' && (
       <>
       {/* Stats Cards */}
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
@@ -178,7 +187,6 @@ export function SuperAdminPanel() {
               />
             </div>
             <Button type="button" onClick={() => setCreateOpen(true)}><Plus className="mr-2 h-4 w-4" />Nova loja</Button>
-            <Button type="button" variant="outline" onClick={() => setUsersOpen(true)}><Users className="mr-2 h-4 w-4" />Usuários</Button>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -400,7 +408,6 @@ export function SuperAdminPanel() {
           }}
         />
       )}
-      <UserManagementDialog open={usersOpen} onClose={() => setUsersOpen(false)} />
     </div>
   );
 }

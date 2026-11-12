@@ -9,8 +9,8 @@ import { Input } from '@/components/ui/input';
 import { CurrencyInput } from '@/components/ui/currency-input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { ensureAdminMonthlyBill, loadAdminBilling, saveAdminBilling } from '@/lib/adminBilling';
-import { EMPTY_STORE_FINANCES, getBillAlert, type BillAlert, type FinanceBill, type StoreFinances } from '@/lib/storeFinances';
+import { ensureAdminMonthlyBill, ensureNextAdminMonthlyBill, loadAdminBilling, saveAdminBilling } from '@/lib/adminBilling';
+import { EMPTY_STORE_FINANCES, getBillAlert, getBillPaymentOptions, type BillAlert, type FinanceBill, type StoreFinances } from '@/lib/storeFinances';
 import { toast } from 'sonner';
 import { useAuth } from '@/auth/AuthContext';
 
@@ -69,8 +69,6 @@ export function AdminBillingPanel({
   const [recurringEnabled, setRecurringEnabled] = useState(false);
   const [recurringDay, setRecurringDay] = useState('10');
   const [recurringAmount, setRecurringAmount] = useState('');
-  const [recurringBoletoCode, setRecurringBoletoCode] = useState('');
-  const [recurringPixCode, setRecurringPixCode] = useState('');
   const [recurringDialogOpen, setRecurringDialogOpen] = useState(false);
   const [addBillDialogOpen, setAddBillDialogOpen] = useState(false);
   const [description, setDescription] = useState('');
@@ -115,8 +113,6 @@ export function AdminBillingPanel({
         setRecurringDay(String(loaded.recurring.dueDay));
         setRecurringEnabled(loaded.recurring.enabled);
         setRecurringAmount(String(monthlyAmount));
-        setRecurringBoletoCode(loaded.recurring.boletoCode ?? (loaded.recurring.paymentType === 'boleto' ? loaded.recurring.paymentCode : '') ?? '');
-        setRecurringPixCode(loaded.recurring.pixCode ?? (loaded.recurring.paymentType === 'pix' ? loaded.recurring.paymentCode : '') ?? '');
         setLoadedEstablishmentId(establishmentId);
       })
       .catch((error: unknown) => {
@@ -133,7 +129,10 @@ export function AdminBillingPanel({
 
   useEffect(() => {
     if (!selectedEstablishment || loadedEstablishmentId !== establishmentId || loading || loadError || !billing.recurring.enabled || billing.recurring.amount <= 0) return;
-    const updated = ensureAdminMonthlyBill(billing, billing.recurring.amount, new Date(), createId);
+    const latestMonthly = billing.bills.filter((bill) => bill.recurringMonth)
+      .sort((a, b) => (b.recurringMonth ?? '').localeCompare(a.recurringMonth ?? ''))[0];
+    const withNext = latestMonthly?.paidAt ? ensureNextAdminMonthlyBill(billing, latestMonthly, createId) : billing;
+    const updated = ensureAdminMonthlyBill(withNext, billing.recurring.amount, new Date(), createId);
     if (updated === billing) return;
     setBilling(updated);
     void saveAdminBilling(selectedEstablishment.id, updated, Boolean(user?.isDemo))
@@ -159,15 +158,22 @@ export function AdminBillingPanel({
         enabled: recurringEnabled,
         dueDay: day,
         amount: Math.round(monthlyAmount * 100) / 100,
-        paymentType: recurringBoletoCode.trim() ? 'boleto' : 'pix',
-        paymentCode: recurringBoletoCode.trim() || recurringPixCode.trim(),
-        boletoCode: recurringBoletoCode.trim(),
-        pixCode: recurringPixCode.trim(),
       },
     };
-    const updatedBilling = recurringEnabled
+    let updatedBilling = recurringEnabled
       ? ensureAdminMonthlyBill(updated, monthlyAmount, new Date(), createId)
       : updated;
+    const currentMonth = todayKey().slice(0, 7);
+    updatedBilling = {
+      ...updatedBilling,
+      bills: updatedBilling.bills.map((bill) => recurringEnabled && bill.recurringMonth === currentMonth && !bill.paidAt
+        ? {
+          ...bill,
+          amount: Math.round(monthlyAmount * 100) / 100,
+          dueDate: `${currentMonth}-${String(Math.min(day, new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate())).padStart(2, '0')}`,
+        }
+        : bill),
+    };
     setBilling(updatedBilling);
     void Promise.all([
       saveAdminBilling(selectedEstablishment.id, updatedBilling, Boolean(user?.isDemo)),
@@ -225,7 +231,7 @@ export function AdminBillingPanel({
     const updated = {
       ...billing,
       bills: billing.bills.map((bill) => bill.id === editingBillId
-        ? { ...bill, ...billDraft, description: billDraft.description.trim(), amount: Math.round(value * 100) / 100, boletoCode: billDraft.boletoCode.trim() }
+        ? { ...bill, ...billDraft, description: billDraft.description.trim(), amount: Math.round(value * 100) / 100, boletoCode: billDraft.boletoCode.trim(), pixCode: billDraft.pixCode?.trim() }
         : bill),
     };
     setBilling(updated);
@@ -238,9 +244,16 @@ export function AdminBillingPanel({
 
   const updateBill = async (billId: string, update: (bill: FinanceBill) => FinanceBill) => {
     if (!selectedEstablishment || loadError || loadedEstablishmentId !== establishmentId) return;
-    const updated = { ...billing, bills: billing.bills.map((bill) => bill.id === billId ? update(bill) : bill) };
+    const updatedBill = billing.bills.find((bill) => bill.id === billId);
+    if (!updatedBill) return;
+    const changedBill = update(updatedBill);
     setSavingBillId(billId);
     try {
+      const updated = ensureNextAdminMonthlyBill(
+        { ...billing, bills: billing.bills.map((bill) => bill.id === billId ? changedBill : bill) },
+        changedBill,
+        createId,
+      );
       await saveAdminBilling(selectedEstablishment.id, updated, Boolean(user?.isDemo));
       setBilling(updated);
       toast.success('Status de pagamento atualizado nas Finanças da loja.');
@@ -300,10 +313,7 @@ export function AdminBillingPanel({
                     ? `Ativa · dia ${recurringDay} · ${formatCurrency(Number(recurringAmount) || 0)} por mês`
                     : 'Geração mensal desativada'}
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  {recurringBoletoCode ? 'Boleto' : ''}{recurringBoletoCode && recurringPixCode ? ' e ' : ''}{recurringPixCode ? 'Pix' : ''}
-                  {!recurringBoletoCode && !recurringPixCode ? 'Sem dados de pagamento' : ''}
-                </p>
+                <p className="text-xs text-muted-foreground">Os pagamentos são liberados individualmente em cada cobrança.</p>
               </div>
               <Button type="button" variant="outline" disabled={loading || Boolean(loadError) || loadedEstablishmentId !== establishmentId} onClick={() => setRecurringDialogOpen(true)}>
                 <Pencil className="mr-2 h-4 w-4" />Editar mensalidade
@@ -315,7 +325,7 @@ export function AdminBillingPanel({
             <DialogContent className="max-w-2xl">
               <DialogHeader>
                 <DialogTitle>Editar mensalidade Kito</DialogTitle>
-                <DialogDescription>Configure o valor, vencimento e formas de pagamento de {selectedEstablishment.name}.</DialogDescription>
+                <DialogDescription>Configure o valor e vencimento de {selectedEstablishment.name}.</DialogDescription>
               </DialogHeader>
               <form className="space-y-4" onSubmit={saveRecurringSettings}>
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -329,14 +339,8 @@ export function AdminBillingPanel({
                   <label className="space-y-1 text-sm font-medium">Dia do vencimento
                     <Input type="number" min="1" max="31" value={recurringDay} onChange={(event) => setRecurringDay(event.target.value)} />
                   </label>
-                  <label className="space-y-1 text-sm font-medium">Código do boleto (opcional)
-                    <Input value={recurringBoletoCode} onChange={(event) => setRecurringBoletoCode(event.target.value)} />
-                  </label>
-                  <label className="space-y-1 text-sm font-medium">Chave ou código Pix (opcional)
-                    <Input value={recurringPixCode} onChange={(event) => setRecurringPixCode(event.target.value)} />
-                  </label>
                 </div>
-                <p className="text-xs text-muted-foreground">Preencha um ou os dois dados. Quando ambos estiverem cadastrados, o cliente poderá escolher Pix ou boleto.</p>
+                <p className="text-xs text-muted-foreground">Para liberar boleto ou Pix, edite a cobrança correspondente na lista.</p>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setRecurringDialogOpen(false)}>Cancelar</Button>
                   <Button type="submit" disabled={loading || Boolean(loadError) || loadedEstablishmentId !== establishmentId}>Salvar mensalidade</Button>
@@ -392,14 +396,14 @@ export function AdminBillingPanel({
                       <label className="space-y-1 text-sm font-medium">Descrição<Input value={billDraft.description} onChange={(event) => setBillDraft({ ...billDraft, description: event.target.value })} /></label>
                       <label className="space-y-1 text-sm font-medium">Valor<CurrencyInput value={billDraft.amount} onValueChange={(value) => setBillDraft({ ...billDraft, amount: value ?? 0 })} /></label>
                       <label className="space-y-1 text-sm font-medium">Vencimento<Input type="date" value={billDraft.dueDate} onChange={(event) => setBillDraft({ ...billDraft, dueDate: event.target.value })} /></label>
-                      <label className="space-y-1 text-sm font-medium">Tipo de pagamento
+                      {!bill.recurringMonth && <label className="space-y-1 text-sm font-medium">Tipo de pagamento
                         <select value={billDraft.paymentType ?? 'boleto'} onChange={(event) => setBillDraft({ ...billDraft, paymentType: event.target.value as 'boleto' | 'pix' })} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
                           <option value="boleto">Boleto</option>
                           <option value="pix">Pix</option>
                         </select>
-                      </label>
-                      <label className="space-y-1 text-sm font-medium">{billDraft.paymentType === 'pix' ? 'Chave ou código Pix' : 'Código do boleto'}<Input value={billDraft.boletoCode} onChange={(event) => setBillDraft({ ...billDraft, boletoCode: event.target.value })} /></label>
-                      <label className="space-y-1 text-sm font-medium">Chave/código Pix adicional<Input value={billDraft.pixCode ?? ''} onChange={(event) => setBillDraft({ ...billDraft, pixCode: event.target.value })} /></label>
+                      </label>}
+                      <label className="space-y-1 text-sm font-medium">{bill.recurringMonth ? 'Código do boleto' : billDraft.paymentType === 'pix' ? 'Chave ou código Pix' : 'Código do boleto'}<Input value={billDraft.boletoCode} onChange={(event) => setBillDraft({ ...billDraft, boletoCode: event.target.value })} /></label>
+                      <label className="space-y-1 text-sm font-medium">Chave/código Pix{bill.recurringMonth ? '' : ' adicional'}<Input value={billDraft.pixCode ?? ''} onChange={(event) => setBillDraft({ ...billDraft, pixCode: event.target.value })} /></label>
                       <label className="space-y-1 text-sm font-medium">Validade<Input type="date" value={billDraft.validUntil} onChange={(event) => setBillDraft({ ...billDraft, validUntil: event.target.value })} /></label>
                       <div className="flex gap-2 sm:col-span-2 lg:col-span-5">
                         <Button type="button" size="sm" onClick={saveBill}>Salvar</Button>
@@ -437,7 +441,13 @@ export function AdminBillingPanel({
                         </Button>
                         <Button type="button" size="icon" variant="ghost" aria-label={`Editar ${bill.description}`} onClick={() => {
                           setEditingBillId(bill.id);
-                          setBillDraft({ description: bill.description, amount: bill.amount, dueDate: bill.dueDate, boletoCode: bill.boletoCode, pixCode: bill.pixCode, paymentType: bill.paymentType ?? 'boleto', validUntil: bill.validUntil });
+                          const options = getBillPaymentOptions(bill);
+                          setBillDraft({
+                            description: bill.description, amount: bill.amount, dueDate: bill.dueDate,
+                            boletoCode: bill.recurringMonth ? options.find((option) => option.type === 'boleto')?.code ?? '' : bill.boletoCode,
+                            pixCode: bill.recurringMonth ? options.find((option) => option.type === 'pix')?.code ?? '' : bill.pixCode,
+                            paymentType: bill.recurringMonth ? 'boleto' : bill.paymentType ?? 'boleto', validUntil: bill.validUntil,
+                          });
                         }}><Pencil className="h-4 w-4" /></Button>
                         <Button type="button" size="icon" variant="ghost" className="text-destructive" aria-label={`Excluir ${bill.description}`} onClick={() => {
                           if (window.confirm(`Excluir a cobrança "${bill.description}"?`)) {

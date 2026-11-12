@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Bell, Check, Pencil, Plus, RefreshCw, Trash2, WalletCards } from 'lucide-react';
+import { Barcode, Bell, Check, Pencil, Plus, QrCode, RefreshCw, Trash2, WalletCards } from 'lucide-react';
 import { useApp } from '@/store';
 import { useAuth } from '@/auth/AuthContext';
 import { formatCurrency } from '@/mockData';
@@ -12,12 +12,13 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { CurrencyInput } from '@/components/ui/currency-input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import {
   ensureCurrentStoreRecurringBills, EMPTY_STORE_FINANCES, getBillAlert, getBillPaymentOptions,
   getCustomerBillStatus, type BillAlert, type CustomerBillStatus, type FinanceBill,
 } from '@/lib/storeFinances';
-import { loadAdminBilling } from '@/lib/adminBilling';
+import { ensureNextAdminMonthlyBill, loadAdminBilling } from '@/lib/adminBilling';
 import { getPeriodRange, type ReportPeriod } from '@/lib/criticalFlows';
 import { buildFinancialStatement } from '@/lib/financialStatement';
 import type { CashRegisterData } from '@/types';
@@ -118,7 +119,7 @@ export function FinanceModule() {
   const [period, setPeriod] = useState<ReportPeriod>('month');
   const [referenceDate, setReferenceDate] = useState(() => localDateKey(new Date()));
   const billingRequestId = useRef(0);
-  const [kitoPaymentSelections, setKitoPaymentSelections] = useState<Record<string, 'boleto' | 'pix'>>({});
+  const [selectedKitoPayment, setSelectedKitoPayment] = useState<{ billId: string; type: 'boleto' | 'pix' } | null>(null);
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
   const [dueDate, setDueDate] = useState(() => localDateKey(new Date()));
@@ -134,7 +135,11 @@ export function FinanceModule() {
     try {
       const loaded = await loadAdminBilling(establishmentId, Boolean(user?.isDemo));
       if (requestId === billingRequestId.current) {
-        setKitoBilling(loaded);
+        const latestMonthly = loaded.bills.filter((bill) => bill.recurringMonth)
+          .sort((a, b) => (b.recurringMonth ?? '').localeCompare(a.recurringMonth ?? ''))[0];
+        setKitoBilling(latestMonthly?.paidAt
+          ? ensureNextAdminMonthlyBill(loaded, latestMonthly, () => `preview-next-${latestMonthly.recurringMonth}`)
+          : loaded);
         setKitoBillingError('');
       }
     } catch (error) {
@@ -316,6 +321,8 @@ export function FinanceModule() {
         : bill),
     }));
   };
+  const paymentBill = kitoBilling.bills.find((bill) => bill.id === selectedKitoPayment?.billId && !bill.paidAt);
+  const selectedPayment = paymentBill && getBillPaymentOptions(paymentBill).find((option) => option.type === selectedKitoPayment?.type);
 
   return (
     <div className="space-y-6">
@@ -379,9 +386,6 @@ export function FinanceModule() {
             const alert = getBillAlert(bill, today);
             const billStatus = getCustomerBillStatus(bill, today);
             const paymentOptions = getBillPaymentOptions(bill);
-            const selectedPaymentType = kitoPaymentSelections[bill.id]
-              ?? (paymentOptions.some((option) => option.type === 'boleto') ? 'boleto' : paymentOptions[0]?.type);
-            const selectedPayment = paymentOptions.find((option) => option.type === selectedPaymentType);
             return (
               <Card key={bill.id} className="space-y-2 p-4">
                 <div className="flex flex-wrap items-center gap-2">
@@ -391,39 +395,38 @@ export function FinanceModule() {
                     label={billStatus === 'pending' ? ALERT_LABELS[alert] : CUSTOMER_BILL_STATUS_LABELS[billStatus]}
                   />
                   {bill.recurringMonth && <Badge variant="outline">Mensalidade · {formatBillMonth(bill.recurringMonth)}</Badge>}
-                  {paymentOptions.length === 0 && <Badge variant="outline">{bill.paymentType === 'pix' ? 'Pix' : 'Boleto'}</Badge>}
                 </div>
                 <p className={cn('text-base font-semibold', DUE_DATE_CLASSES[alert])}>Vencimento: {new Date(`${bill.dueDate}T00:00:00`).toLocaleDateString('pt-BR')}</p>
                 <p className="text-sm text-muted-foreground">Valor: {formatCurrency(bill.amount)}</p>
                 {bill.paidAt && <p className="text-sm font-medium text-emerald-700">Pagamento confirmado pelo Kito em {new Date(bill.paidAt).toLocaleDateString('pt-BR')}.</p>}
-                {!bill.paidAt && paymentOptions.length > 1 && (
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">Escolha a forma de pagamento para ver os dados:</p>
-                    <div className="flex flex-wrap gap-2">
-                      {paymentOptions.map((option) => (
-                        <Button
-                          key={option.type}
-                          type="button"
-                          size="sm"
-                          variant={selectedPaymentType === option.type ? 'default' : 'outline'}
-                          aria-pressed={selectedPaymentType === option.type}
-                          onClick={() => setKitoPaymentSelections((current) => ({ ...current, [bill.id]: option.type }))}
-                        >
-                          {option.type === 'pix' ? 'Selecionar Pix' : 'Selecionar boleto'}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {!bill.paidAt && selectedPayment && (
-                  <p className="break-all text-sm font-medium">
-                    {selectedPayment.type === 'pix' ? 'Chave ou código Pix' : 'Código do boleto'}: {selectedPayment.code}
-                  </p>
-                )}
+                {!bill.paidAt && <div className="flex flex-wrap gap-2" aria-label="Formas de pagamento">
+                  {(['boleto', 'pix'] as const).map((type) => {
+                    const available = paymentOptions.some((option) => option.type === type);
+                    const Icon = type === 'boleto' ? Barcode : QrCode;
+                    const label = type === 'boleto' ? 'Boleto' : 'Pix';
+                    return <Button key={type} type="button" size="sm" variant="outline"
+                      disabled={!available}
+                      aria-label={`${label} ${available ? 'disponível' : 'indisponível'}`}
+                      className={available ? 'border-emerald-500 text-emerald-700 hover:text-emerald-800' : 'text-slate-400 opacity-70'}
+                      onClick={() => setSelectedKitoPayment({ billId: bill.id, type })}>
+                      <Icon aria-hidden="true" className="mr-2 h-4 w-4" />{label}
+                    </Button>;
+                  })}
+                </div>}
                 {bill.validUntil && <p className="text-sm text-muted-foreground">Validade: {new Date(`${bill.validUntil}T00:00:00`).toLocaleDateString('pt-BR')}</p>}
               </Card>
             );
           })}
+          <Dialog open={Boolean(selectedPayment)} onOpenChange={(open) => { if (!open) setSelectedKitoPayment(null); }}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{selectedPayment?.type === 'pix' ? 'Pagamento por Pix' : 'Pagamento por boleto'}</DialogTitle>
+                <DialogDescription>{paymentBill?.description} · {paymentBill && formatCurrency(paymentBill.amount)}</DialogDescription>
+              </DialogHeader>
+              <p className="text-sm font-medium">{selectedPayment?.type === 'pix' ? 'Chave ou código Pix' : 'Código do boleto'}</p>
+              <p className="break-all rounded-md border bg-muted/40 p-3 text-sm">{selectedPayment?.code}</p>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         <TabsContent value="bills" className="space-y-4">

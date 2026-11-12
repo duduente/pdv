@@ -47,6 +47,22 @@ export function appendSupportMessage(conversation: SupportConversation, message:
   return { ...conversation, messages: [...conversation.messages, message] };
 }
 
+export function getUnreadSupportCount(conversation: SupportConversation) {
+  if (!conversation.humanRequestedAt || conversation.closedAt) return 0;
+  const requested = Date.parse(conversation.humanRequestedAt);
+  const seen = conversation.adminSeenAt ? Date.parse(conversation.adminSeenAt) : -Infinity;
+  const messages = conversation.messages.filter((message) => message.sender === 'merchant'
+    && Date.parse(message.createdAt) >= requested && Date.parse(message.createdAt) > seen).length;
+  return messages || (requested > seen ? 1 : 0);
+}
+
+export function getSupportSeenThrough(conversation: SupportConversation) {
+  const timestamps = [conversation.humanRequestedAt, conversation.adminSeenAt,
+    ...conversation.messages.filter((message) => message.sender === 'merchant').map((message) => message.createdAt)]
+    .filter((timestamp): timestamp is string => Boolean(timestamp));
+  return timestamps.reduce((latest, timestamp) => Date.parse(timestamp) > Date.parse(latest) ? timestamp : latest);
+}
+
 export function isSupportConversationExpired(conversation: SupportConversation, now = Date.now()) {
   return Boolean(
     conversation.humanRequestedAt
@@ -382,18 +398,21 @@ export async function requestHumanSupport(input: {
 export async function markSupportConversationSeen(input: {
   isDemo: boolean;
   conversationId: string;
+  seenThrough?: string;
 }) {
-  const seenAt = new Date().toISOString();
+  const joinedAt = new Date().toISOString();
+  const seenAt = input.seenThrough ?? joinedAt;
   if (!isRemote(input.isDemo) || !supabase) {
     writeLocal(readLocal().map((conversation) => conversation.id !== input.conversationId
       ? conversation
-      : { ...conversation, adminSeenAt: seenAt, adminJoinedAt: seenAt }));
+      : { ...conversation, adminSeenAt: conversation.adminSeenAt && Date.parse(conversation.adminSeenAt) > Date.parse(seenAt) ? conversation.adminSeenAt : seenAt, adminJoinedAt: joinedAt }));
     return;
   }
 
   const { error } = await supabase.from('support_conversations')
-    .update({ admin_seen_at: seenAt, admin_joined_at: seenAt })
-    .eq('id', input.conversationId);
+    .update({ admin_seen_at: seenAt, admin_joined_at: joinedAt })
+    .eq('id', input.conversationId)
+    .or(`admin_seen_at.is.null,admin_seen_at.lt.${seenAt}`);
   if (error) throw new Error(`Não foi possível marcar a conversa como lida: ${error.message}`);
 }
 
@@ -525,7 +544,7 @@ const HELP_ANSWERS: HelpAnswer[] = [
       'quanto entrou', 'quanto eu vendi', 'quanto a loja vendeu', 'dar uma olhada nas vendas',
       'ver as vendas', 'olhar as vendas', 'acompanhar vendas', 'entrou hoje', 'entrou no caixa',
     ],
-    answer: 'No menu lateral, abra Dashboard. Nos filtros acima dos gráficos, escolha Diário, Semanal, Mensal ou Anual e informe a Data de referência. Os gráficos mostram vendas e movimentações do período; o faturamento por profissional aparece quando Agendamentos e Relatórios estão disponíveis para sua conta.',
+    answer: 'No menu lateral, abra Relatórios. Nos filtros dos gráficos, escolha Diário, Semanal, Mensal ou Anual e informe a Data de referência. O Dashboard mostra indicadores operacionais, como pedidos, agendamentos e contas.',
   },
   {
     keywords: [
@@ -561,7 +580,7 @@ const HELP_ANSWERS: HelpAnswer[] = [
   },
   {
     keywords: ['cancelar venda', 'cancelar uma venda', 'cancelo venda', 'cancelo uma venda', 'estornar venda', 'estornar', 'estorno', 'excluir venda', 'cancelamento de venda'],
-    answer: 'Acesse Frente de Caixa → Relatórios e localize a venda. O cancelamento/estorno ou a exclusão pede confirmação e um motivo obrigatório; itens de estoque e registros relacionados podem ser estornados. Se a ação não aparecer, peça a permissão de vendas ao administrador.',
+    answer: 'Acesse Relatórios no menu lateral e localize a venda no relatório de caixa. O cancelamento/estorno ou a exclusão pede confirmação e um motivo obrigatório; itens de estoque e registros relacionados podem ser estornados. Se a ação não aparecer, peça a permissão de vendas ao administrador.',
   },
   {
     keywords: [
@@ -593,7 +612,7 @@ const HELP_ANSWERS: HelpAnswer[] = [
       'dar uma olhada no relatorio', 'como foi o movimento', 'movimento do dia',
       'ver o que vendeu', 'conferir as vendas', 'fechamento do dia',
     ],
-    answer: 'Abra Frente de Caixa → Relatórios. Escolha Diário, Semanal, Mensal ou Anual e selecione a Data de referência; para consultar um dia específico, escolha Diário e selecione a data. O relatório inclui vendas, despesas, formas e origens de pagamento, lucro/margem estimados e entregadores.',
+    answer: 'Abra Relatórios no menu lateral. Escolha Diário, Semanal, Mensal ou Anual e selecione a Data de referência; para consultar um dia específico, escolha Diário e selecione a data. O relatório inclui vendas, despesas, formas e origens de pagamento, lucro/margem estimados e entregadores.',
   },
   {
     keywords: [
@@ -601,18 +620,18 @@ const HELP_ANSWERS: HelpAnswer[] = [
       'baixar planilha', 'baixar no excel', 'jogar no excel', 'salvar relatorio',
       'mandar relatorio pra planilha', 'arquivo do relatorio',
     ],
-    answer: 'Em Frente de Caixa → Relatórios, escolha primeiro o período e a data de referência. Use Exportar Excel para baixar uma planilha com abas de resumo, vendas, despesas, movimentações, entregadores e auditoria; Backup JSON baixa os dados estruturados do relatório.',
+    answer: 'Em Relatórios, escolha primeiro o período e a data de referência. Use Exportar Excel para baixar uma planilha com abas de resumo, vendas, despesas, movimentações, entregadores e auditoria; Backup JSON baixa os dados estruturados do relatório.',
   },
   {
     keywords: ['lucro', 'margem', 'custo do produto', 'lucro estimado'],
-    answer: 'O lucro e a margem estimados aparecem no Dashboard e em Frente de Caixa → Relatórios. Cadastre o custo unitário nos produtos do Estoque ou nos itens do Cardápio; o custo é copiado para novas vendas. O cálculo considera custos conhecidos e despesas lançadas, mas não impostos, tarifas de pagamento nem folha, e fica parcial se faltarem custos.',
+    answer: 'O lucro e a margem estimados aparecem em Relatórios no menu lateral. Cadastre o custo unitário nos produtos do Estoque ou nos itens do Cardápio; o custo é copiado para novas vendas. O cálculo considera custos conhecidos e despesas lançadas, mas não impostos, tarifas de pagamento nem folha, e fica parcial se faltarem custos.',
   },
   {
     keywords: [
       'entregador', 'entregadores', 'quanto cada entregador', 'relatorio por entregador',
       'quanto fez cada entregador', 'corrida do entregador', 'entregas de cada entregador',
     ],
-    answer: 'O relatório por entregador fica em Frente de Caixa → Relatórios. Atribua o entregador ao pedido no Delivery para que as entregas possam ser agrupadas corretamente no relatório.',
+    answer: 'O relatório por entregador fica em Relatórios no menu lateral. Atribua o entregador ao pedido no Delivery para que as entregas possam ser agrupadas corretamente no relatório.',
   },
   {
     keywords: [
@@ -696,7 +715,7 @@ const HELP_ANSWERS: HelpAnswer[] = [
       'relatorio por profissional', 'vendas por profissional', 'faturamento por profissional',
       'quanto cada barbeiro fez', 'quanto cada profissional ganhou',
     ],
-    answer: 'Abra Agendamentos → Relatório para ver atendimentos pagos e faturamento por profissional. Há filtros de Hoje, Esta semana e Este mês. Os atendimentos precisam ser registrados como pagos no caixa para entrar no faturamento.',
+    answer: 'Abra Relatórios no menu lateral para ver atendimentos pagos e faturamento por profissional. Há filtros de Hoje, Esta semana e Este mês. Os atendimentos precisam ser registrados como pagos no caixa para entrar no faturamento.',
   },
   {
     keywords: [
