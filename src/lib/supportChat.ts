@@ -2,6 +2,9 @@ import { supabase } from '@/lib/supabase';
 
 export type SupportSender = 'merchant' | 'ai' | 'admin' | 'system';
 export const KITO_RESPONSE_DELAY_MS = 1750;
+export const SUPPORT_INACTIVITY_MS = 10 * 60 * 1000;
+export const SUPPORT_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const SUPPORT_ATTACHMENT_BUCKET = 'support-attachments';
 
 export function waitForKitoResponse() {
   return new Promise<void>((resolve) => globalThis.setTimeout(resolve, KITO_RESPONSE_DELAY_MS));
@@ -14,6 +17,13 @@ export interface SupportMessage {
   senderName: string;
   body: string;
   createdAt: string;
+  attachment: SupportAttachment | null;
+}
+
+export interface SupportAttachment {
+  name: string;
+  mimeType: string;
+  path: string;
 }
 
 export interface SupportConversation {
@@ -24,6 +34,9 @@ export interface SupportConversation {
   userName: string;
   humanRequestedAt: string | null;
   adminSeenAt: string | null;
+  adminJoinedAt: string | null;
+  adminTypingAt: string | null;
+  closedAt: string | null;
   createdAt: string;
   updatedAt: string;
   messages: SupportMessage[];
@@ -34,7 +47,33 @@ export function appendSupportMessage(conversation: SupportConversation, message:
   return { ...conversation, messages: [...conversation.messages, message] };
 }
 
+export function isSupportConversationExpired(conversation: SupportConversation, now = Date.now()) {
+  return Boolean(
+    conversation.humanRequestedAt
+    && !conversation.closedAt
+    && now - Date.parse(conversation.updatedAt) >= SUPPORT_INACTIVITY_MS,
+  );
+}
+
+export function getSupportAttachmentMimeType(file: Pick<File, 'name' | 'type' | 'size'>) {
+  if (file.size > SUPPORT_ATTACHMENT_MAX_BYTES) {
+    throw new Error('O arquivo deve ter no máximo 5 MB.');
+  }
+  const extension = file.name.split('.').at(-1)?.toLowerCase();
+  const mimeType = extension === 'pdf'
+    ? 'application/pdf'
+    : extension === 'jpg' || extension === 'jpeg'
+      ? 'image/jpeg'
+      : null;
+  if (!mimeType || (file.type && file.type !== mimeType)) {
+    throw new Error('Anexe somente arquivos PDF ou JPEG.');
+  }
+  return mimeType;
+}
+
 const LOCAL_KEY = 'kito-support-conversations';
+const LOCAL_ATTACHMENT_DB = 'kito-support-attachments';
+const LOCAL_ATTACHMENT_STORE = 'attachments';
 const SUPPORT_EVENT = 'kito:support-conversations-changed';
 
 function isRemote(userIsDemo: boolean) {
@@ -54,7 +93,56 @@ function writeLocal(conversations: SupportConversation[]) {
   window.dispatchEvent(new Event(SUPPORT_EVENT));
 }
 
+function openLocalAttachmentDb() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      reject(new Error('O armazenamento local de anexos não está disponível neste navegador.'));
+      return;
+    }
+    const request = indexedDB.open(LOCAL_ATTACHMENT_DB, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(LOCAL_ATTACHMENT_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error('Não foi possível abrir o armazenamento local de anexos.'));
+  });
+}
+
+async function storeLocalAttachment(path: string, file: File) {
+  const database = await openLocalAttachmentDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(LOCAL_ATTACHMENT_STORE, 'readwrite');
+      transaction.objectStore(LOCAL_ATTACHMENT_STORE).put(file, path);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('Não foi possível salvar o anexo localmente.'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Não foi possível salvar o anexo localmente.'));
+    });
+  } finally {
+    database.close();
+  }
+}
+
+async function readLocalAttachment(path: string) {
+  const database = await openLocalAttachmentDb();
+  try {
+    return await new Promise<Blob>((resolve, reject) => {
+      const request = database.transaction(LOCAL_ATTACHMENT_STORE, 'readonly')
+        .objectStore(LOCAL_ATTACHMENT_STORE)
+        .get(path);
+      request.onsuccess = () => {
+        if (request.result instanceof Blob) resolve(request.result);
+        else reject(new Error('O anexo local não foi encontrado.'));
+      };
+      request.onerror = () => reject(request.error ?? new Error('Não foi possível abrir o anexo local.'));
+    });
+  } finally {
+    database.close();
+  }
+}
+
 function fromMessageRow(row: Record<string, unknown>): SupportMessage {
+  const attachmentPath = row.attachment_path ? String(row.attachment_path) : null;
   return {
     id: String(row.id),
     sender: row.sender_kind as SupportSender,
@@ -62,6 +150,11 @@ function fromMessageRow(row: Record<string, unknown>): SupportMessage {
     senderName: String(row.sender_name),
     body: String(row.body),
     createdAt: String(row.created_at),
+    attachment: attachmentPath ? {
+      path: attachmentPath,
+      name: String(row.attachment_name),
+      mimeType: String(row.attachment_mime_type),
+    } : null,
   };
 }
 
@@ -74,6 +167,9 @@ function fromConversationRow(row: Record<string, unknown>, messages: SupportMess
     userName: String(row.user_name),
     humanRequestedAt: row.human_requested_at ? String(row.human_requested_at) : null,
     adminSeenAt: row.admin_seen_at ? String(row.admin_seen_at) : null,
+    adminJoinedAt: row.admin_joined_at ? String(row.admin_joined_at) : null,
+    adminTypingAt: row.admin_typing_at ? String(row.admin_typing_at) : null,
+    closedAt: row.closed_at ? String(row.closed_at) : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     messages,
@@ -96,12 +192,32 @@ export async function listSupportConversations(input: {
   establishmentId?: string;
 }): Promise<SupportConversation[]> {
   if (!isRemote(input.isDemo) || !supabase) {
-    return readLocal().filter((conversation) =>
+    const now = new Date().toISOString();
+    const allConversations = readLocal();
+    const expired = allConversations.map((conversation) => isSupportConversationExpired(conversation)
+      ? { ...conversation, closedAt: now }
+      : conversation);
+    if (expired.some((conversation, index) => conversation !== allConversations[index])) {
+      writeLocal(expired);
+    }
+    return expired.filter((conversation) =>
       input.isAdmin
         ? true
         : conversation.userId === input.userId && conversation.establishmentId === input.establishmentId,
     );
   }
+
+  const closeExpiredQuery = supabase.from('support_conversations')
+    .update({ closed_at: new Date().toISOString() })
+    .is('closed_at', null)
+    .not('human_requested_at', 'is', null)
+    .lte('updated_at', new Date(Date.now() - SUPPORT_INACTIVITY_MS).toISOString());
+  if (!input.isAdmin) {
+    if (!input.establishmentId) return [];
+    closeExpiredQuery.eq('user_id', input.userId).eq('establishment_id', input.establishmentId);
+  }
+  const { error: closeError } = await closeExpiredQuery;
+  if (closeError) throw new Error(`Não foi possível encerrar atendimentos inativos: ${closeError.message}`);
 
   let conversationQuery = supabase.from('support_conversations').select('*');
   if (!input.isAdmin) {
@@ -146,6 +262,9 @@ export async function createSupportConversation(input: {
     userName: input.userName,
     humanRequestedAt: null,
     adminSeenAt: null,
+    adminJoinedAt: null,
+    adminTypingAt: null,
+    closedAt: null,
     createdAt: now,
     updatedAt: now,
     messages: [],
@@ -173,14 +292,16 @@ export async function addSupportMessage(input: {
   senderId: string;
   senderName: string;
   body: string;
+  attachment?: SupportAttachment | null;
 }): Promise<SupportMessage> {
   const message: SupportMessage = {
     id: crypto.randomUUID(),
     sender: input.sender,
     senderId: input.senderId,
     senderName: input.senderName,
-    body: input.body.trim(),
+    body: input.body.trim() || (input.attachment ? `Arquivo anexado: ${input.attachment.name}` : ''),
     createdAt: new Date().toISOString(),
+    attachment: input.attachment ?? null,
   };
   if (!isRemote(input.isDemo) || !supabase) {
     writeLocal(readLocal().map((conversation) => conversation.id !== input.conversationId
@@ -196,9 +317,48 @@ export async function addSupportMessage(input: {
     sender_id: message.senderId || null,
     sender_name: message.senderName,
     body: message.body,
+    attachment_path: message.attachment?.path ?? null,
+    attachment_name: message.attachment?.name ?? null,
+    attachment_mime_type: message.attachment?.mimeType ?? null,
   });
   if (error) throw new Error(`Não foi possível enviar a mensagem: ${error.message}`);
   return message;
+}
+
+export async function uploadSupportAttachment(input: {
+  isDemo: boolean;
+  conversationId: string;
+  file: File;
+}): Promise<SupportAttachment> {
+  const mimeType = getSupportAttachmentMimeType(input.file);
+  const safeName = input.file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const path = `${input.conversationId}/${crypto.randomUUID()}-${safeName}`;
+  if (!isRemote(input.isDemo) || !supabase) {
+    await storeLocalAttachment(path, input.file);
+    return { name: input.file.name, mimeType, path };
+  }
+
+  const { error } = await supabase.storage.from(SUPPORT_ATTACHMENT_BUCKET).upload(path, input.file, {
+    contentType: mimeType,
+    upsert: false,
+  });
+  if (error) throw new Error(`Não foi possível anexar o arquivo: ${error.message}`);
+  return { name: input.file.name, mimeType, path };
+}
+
+export async function getSupportAttachmentUrl(input: {
+  isDemo: boolean;
+  attachment: SupportAttachment;
+}): Promise<string> {
+  if (!isRemote(input.isDemo) || !supabase) {
+    if (input.attachment.path.startsWith('data:')) return input.attachment.path;
+    return URL.createObjectURL(await readLocalAttachment(input.attachment.path));
+  }
+  const { data, error } = await supabase.storage
+    .from(SUPPORT_ATTACHMENT_BUCKET)
+    .createSignedUrl(input.attachment.path, 3600);
+  if (error) throw new Error(`Não foi possível abrir o anexo: ${error.message}`);
+  return data.signedUrl;
 }
 
 export async function requestHumanSupport(input: {
@@ -227,14 +387,53 @@ export async function markSupportConversationSeen(input: {
   if (!isRemote(input.isDemo) || !supabase) {
     writeLocal(readLocal().map((conversation) => conversation.id !== input.conversationId
       ? conversation
-      : { ...conversation, adminSeenAt: seenAt }));
+      : { ...conversation, adminSeenAt: seenAt, adminJoinedAt: seenAt }));
     return;
   }
 
   const { error } = await supabase.from('support_conversations')
-    .update({ admin_seen_at: seenAt })
+    .update({ admin_seen_at: seenAt, admin_joined_at: seenAt })
     .eq('id', input.conversationId);
   if (error) throw new Error(`Não foi possível marcar a conversa como lida: ${error.message}`);
+}
+
+export async function setSupportAdminTyping(input: {
+  isDemo: boolean;
+  conversationId: string;
+  isTyping: boolean;
+}) {
+  const typingAt = input.isTyping ? new Date().toISOString() : null;
+  if (!isRemote(input.isDemo) || !supabase) {
+    writeLocal(readLocal().map((conversation) => conversation.id !== input.conversationId
+      ? conversation
+      : { ...conversation, adminTypingAt: typingAt }));
+    return;
+  }
+
+  const { error } = await supabase.from('support_conversations')
+    .update({ admin_typing_at: typingAt })
+    .eq('id', input.conversationId)
+    .is('closed_at', null);
+  if (error) throw new Error(`Não foi possível atualizar o status de digitação: ${error.message}`);
+}
+
+export async function closeSupportConversation(input: {
+  isDemo: boolean;
+  conversationId: string;
+}) {
+  const closedAt = new Date().toISOString();
+  if (!isRemote(input.isDemo) || !supabase) {
+    writeLocal(readLocal().map((conversation) => conversation.id !== input.conversationId
+      ? conversation
+      : { ...conversation, closedAt }));
+    return;
+  }
+
+  const { error } = await supabase.from('support_conversations')
+    .update({ closed_at: closedAt })
+    .eq('id', input.conversationId)
+    .is('closed_at', null);
+  if (error) throw new Error(`Não foi possível finalizar o atendimento: ${error.message}`);
 }
 
 interface HelpAnswer {

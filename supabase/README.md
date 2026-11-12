@@ -26,4 +26,6 @@ Deploy `supabase/functions/admin-manage-users/` as an Edge Function. Configure i
 
 Apply the migrations in order before deploying frontend changes. Existing store memberships receive full access; store managers can create restricted subusers from **Configurações da loja** through the same Edge Function. The function also supports store-scoped list and removal actions, and checks the caller's `manage-users` permission.
 
+The support-chat lifecycle migration adds inactivity-based closure and a private `support-attachments` bucket for PDF and JPEG files (up to 5 MB). Apply it before deploying the frontend so the chat can store and securely serve attachments.
+
 Subuser permissions are checked in the frontend and by database row-level security. Store managers can only delegate permissions they themselves hold. Cash permissions separately control the matching interface areas and restrict writes to sales, movements/extracts, and cash sessions; delivery users may register delivery payments without changing other cash sales. Apply and test these policies in a non-production Supabase project before using real store data. Existing browser-local records are copied to `tenant_records` on first authorized access to each tenant-scoped key.

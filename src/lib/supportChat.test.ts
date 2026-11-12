@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   appendSupportMessage,
   getKitoAnswer,
+  getSupportAttachmentMimeType,
   KITO_RESPONSE_DELAY_MS,
+  isSupportConversationExpired,
+  SUPPORT_ATTACHMENT_MAX_BYTES,
+  SUPPORT_INACTIVITY_MS,
   waitForKitoResponse,
   type SupportConversation,
   type SupportMessage,
@@ -17,6 +21,7 @@ describe('getKitoAnswer', () => {
       senderName: 'Lojista',
       body: 'Oi',
       createdAt: '2026-11-09T12:00:00.000Z',
+      attachment: null,
     };
     const conversation: SupportConversation = {
       id: 'conversation-1',
@@ -26,12 +31,47 @@ describe('getKitoAnswer', () => {
       userName: 'Lojista',
       humanRequestedAt: null,
       adminSeenAt: null,
+      adminJoinedAt: null,
+      adminTypingAt: null,
+      closedAt: null,
       createdAt: message.createdAt,
       updatedAt: message.createdAt,
       messages: [message],
     };
 
     expect(appendSupportMessage(conversation, message).messages).toHaveLength(1);
+  });
+
+  it('expires human support after 10 minutes without activity but leaves bot chats open', () => {
+    const updatedAt = '2026-11-09T12:00:00.000Z';
+    const conversation: SupportConversation = {
+      id: 'conversation-1',
+      establishmentId: 'store-1',
+      establishmentName: 'Loja',
+      userId: 'user-1',
+      userName: 'Lojista',
+      humanRequestedAt: updatedAt,
+      adminSeenAt: null,
+      adminJoinedAt: null,
+      adminTypingAt: null,
+      closedAt: null,
+      createdAt: updatedAt,
+      updatedAt,
+      messages: [],
+    };
+
+    expect(isSupportConversationExpired(conversation, Date.parse(updatedAt) + SUPPORT_INACTIVITY_MS - 1)).toBe(false);
+    expect(isSupportConversationExpired(conversation, Date.parse(updatedAt) + SUPPORT_INACTIVITY_MS)).toBe(true);
+    expect(isSupportConversationExpired({ ...conversation, humanRequestedAt: null }, Date.now())).toBe(false);
+    expect(isSupportConversationExpired({ ...conversation, closedAt: updatedAt }, Date.now())).toBe(false);
+  });
+
+  it('accepts PDF and JPEG attachments and rejects unsupported or oversized files', () => {
+    expect(getSupportAttachmentMimeType({ name: 'manual.PDF', type: 'application/pdf', size: 100 })).toBe('application/pdf');
+    expect(getSupportAttachmentMimeType({ name: 'photo.jpeg', type: 'image/jpeg', size: 100 })).toBe('image/jpeg');
+    expect(() => getSupportAttachmentMimeType({ name: 'notes.txt', type: 'text/plain', size: 100 })).toThrow('PDF ou JPEG');
+    expect(() => getSupportAttachmentMimeType({ name: 'photo.jpg', type: 'image/png', size: 100 })).toThrow('PDF ou JPEG');
+    expect(() => getSupportAttachmentMimeType({ name: 'large.pdf', type: 'application/pdf', size: SUPPORT_ATTACHMENT_MAX_BYTES + 1 })).toThrow('5 MB');
   });
 
   it('waits about 1.75 seconds before sending an automatic answer', async () => {

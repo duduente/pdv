@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Bell, Headphones, Send, UserRound } from 'lucide-react';
+import { Bell, CheckCircle2, Headphones, Send, UserRound } from 'lucide-react';
 import { useAuth } from '@/auth/AuthContext';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { SupportAttachmentLink } from '@/components/SupportAttachmentLink';
 import { cn } from '@/lib/utils';
 import {
   addSupportMessage,
+  closeSupportConversation,
   listSupportConversations,
   markSupportConversationSeen,
+  setSupportAdminTyping,
   subscribeToLocalSupportChanges,
   type SupportConversation,
 } from '@/lib/supportChat';
@@ -41,8 +44,10 @@ export function SupportInbox() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [closing, setClosing] = useState(false);
   const alertInterval = useRef<number | null>(null);
   const loadErrorShown = useRef(false);
+  const enteredConversationId = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!user || user.role !== 'super-admin') return;
@@ -73,10 +78,13 @@ export function SupportInbox() {
   }, [refresh, user]);
 
   const unreadHumanThreads = useMemo(() => conversations.filter((conversation) =>
-    conversation.humanRequestedAt
+    conversation.humanRequestedAt && !conversation.closedAt
     && (!conversation.adminSeenAt || Date.parse(conversation.adminSeenAt) < Date.parse(conversation.humanRequestedAt)),
   ), [conversations]);
   const selected = conversations.find((conversation) => conversation.id === selectedId) ?? null;
+  const selectedConversationId = selected?.id ?? null;
+  const selectedClosedAt = selected?.closedAt ?? null;
+  const isDrafting = Boolean(draft.trim());
 
   useEffect(() => {
     if (alertInterval.current !== null) window.clearInterval(alertInterval.current);
@@ -91,21 +99,60 @@ export function SupportInbox() {
   }, [unreadHumanThreads.length]);
 
   useEffect(() => {
-    if (!user || !selected || selected.adminSeenAt) return;
+    if (!selectedConversationId) {
+      enteredConversationId.current = null;
+      return;
+    }
+    if (!user || enteredConversationId.current === selectedConversationId) return;
+    enteredConversationId.current = selectedConversationId;
     void markSupportConversationSeen({
       isDemo: Boolean(user.isDemo),
-      conversationId: selected.id,
+      conversationId: selectedConversationId,
     }).then(() => void refresh()).catch((error: unknown) => {
       toast.error(error instanceof Error ? error.message : 'Não foi possível marcar a conversa como lida.');
     });
-  }, [refresh, selected, user]);
+  }, [refresh, selectedConversationId, user]);
+
+  useEffect(() => {
+    if (!user || !selectedConversationId || selectedClosedAt || !isDrafting) return;
+    let active = true;
+    let errorShown = false;
+    const updateTyping = async () => {
+      try {
+        await setSupportAdminTyping({
+          isDemo: Boolean(user.isDemo),
+          conversationId: selectedConversationId,
+          isTyping: true,
+        });
+        errorShown = false;
+      } catch (error) {
+        if (active && !errorShown) {
+          toast.error(error instanceof Error ? error.message : 'Não foi possível atualizar o status de digitação.');
+          errorShown = true;
+        }
+      }
+    };
+    void updateTyping();
+    const intervalId = window.setInterval(() => void updateTyping(), 5000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+      void setSupportAdminTyping({
+        isDemo: Boolean(user.isDemo),
+        conversationId: selectedConversationId,
+        isTyping: false,
+      }).catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : 'Não foi possível atualizar o status de digitação.');
+      });
+    };
+  }, [isDrafting, selectedClosedAt, selectedConversationId, user]);
 
   if (!user || user.role !== 'super-admin') return null;
 
   const sendReply = async (event: FormEvent) => {
     event.preventDefault();
     const body = draft.trim();
-    if (!body || !selected || sending) return;
+    if (!body || !selected || selected.closedAt || sending) return;
     setSending(true);
     setDraft('');
     try {
@@ -114,7 +161,7 @@ export function SupportInbox() {
         conversationId: selected.id,
         sender: 'admin',
         senderId: user.id,
-        senderName: user.displayName || 'Administrador',
+        senderName: 'Equipe de suporte',
         body,
       });
       await refresh();
@@ -126,6 +173,23 @@ export function SupportInbox() {
     }
   };
 
+  const finishConversation = async () => {
+    if (!selected || selected.closedAt || closing) return;
+    setClosing(true);
+    try {
+      await closeSupportConversation({
+        isDemo: Boolean(user.isDemo),
+        conversationId: selected.id,
+      });
+      await refresh();
+      toast.success('Atendimento finalizado.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível finalizar o atendimento.');
+    } finally {
+      setClosing(false);
+    }
+  };
+
   return (
     <Card className="overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b p-5">
@@ -134,7 +198,7 @@ export function SupportInbox() {
           <p className="text-sm text-muted-foreground">Converse com usuários que solicitaram ajuda humana.</p>
         </div>
         <Badge variant={unreadHumanThreads.length ? 'destructive' : 'secondary'}>
-          {unreadHumanThreads.length ? `${unreadHumanThreads.length} aguardando` : `${conversations.filter((item) => item.humanRequestedAt).length} conversas`}
+          {unreadHumanThreads.length ? `${unreadHumanThreads.length} aguardando` : `${conversations.filter((item) => item.humanRequestedAt && !item.closedAt).length} atendimentos ativos`}
         </Badge>
       </div>
       <div className="grid min-h-[22rem] md:grid-cols-[minmax(13rem,0.8fr)_minmax(0,1.5fr)]">
@@ -155,6 +219,7 @@ export function SupportInbox() {
                   </span>
                   <span className="block truncate text-xs text-muted-foreground">{conversation.establishmentName}</span>
                   <span className="mt-1 block truncate text-xs text-muted-foreground">{conversation.messages.at(-1)?.body ?? 'Solicitou suporte humano'}</span>
+                  {conversation.closedAt && <span className="mt-1 inline-block text-[11px] text-muted-foreground">Atendimento finalizado</span>}
                 </button>
               );
             })}
@@ -167,25 +232,39 @@ export function SupportInbox() {
               <div className="flex items-center gap-2 border-b p-4">
                 <UserRound className="h-4 w-4 text-muted-foreground" />
                 <div className="min-w-0"><p className="truncate text-sm font-medium">{selected.userName}</p><p className="truncate text-xs text-muted-foreground">{selected.establishmentName}</p></div>
-                <Badge className="ml-auto">Suporte Humano</Badge>
+                <Badge className="ml-auto" variant={selected.closedAt ? 'secondary' : 'default'}>{selected.closedAt ? 'Finalizado' : 'Suporte Humano'}</Badge>
+                {!selected.closedAt && (
+                  <Button type="button" size="sm" variant="outline" disabled={closing} onClick={() => void finishConversation()}>
+                    <CheckCircle2 className="mr-1 h-4 w-4" />Finalizar
+                  </Button>
+                )}
               </div>
               <ScrollArea className="min-h-0 flex-1 p-4">
                 <div className="space-y-3">
                   {selected.messages.map((message) => (
                     <div key={message.id} className={cn(
                       'max-w-[90%] rounded-lg px-3 py-2 text-sm',
-                      message.sender === 'admin' ? 'ml-auto bg-primary text-primary-foreground' : 'bg-muted',
+                      message.sender === 'merchant' && 'mr-auto bg-primary text-primary-foreground',
+                      message.sender === 'ai' && 'mr-auto bg-muted',
+                      message.sender === 'admin' && 'ml-auto border border-sky-200 bg-sky-50 text-slate-800 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-50',
                       message.sender === 'system' && 'mx-auto max-w-full bg-transparent text-center text-xs text-muted-foreground',
                     )}>
-                      {message.sender !== 'admin' && message.sender !== 'system' && <p className="mb-1 text-[11px] font-semibold opacity-75">{message.senderName}</p>}
+                      {message.sender !== 'system' && <p className="mb-1 text-[11px] font-semibold opacity-75">{message.sender === 'admin' ? 'Equipe de suporte' : message.senderName}</p>}
                       <p className="whitespace-pre-wrap">{message.body}</p>
+                      {message.attachment && <SupportAttachmentLink attachment={message.attachment} isDemo={Boolean(user.isDemo)} />}
                     </div>
                   ))}
+                  {selected.adminTypingAt && !selected.closedAt && Date.now() - Date.parse(selected.adminTypingAt) < 12_000 && (
+                    <div className="mr-auto flex w-fit items-center gap-1.5 rounded-lg bg-muted px-3 py-3" role="status" aria-label="Administrador está digitando">
+                      {[0, 1, 2].map((dot) => <span key={dot} className="typing-dot h-2 w-2 rounded-full bg-muted-foreground" style={{ animationDelay: `${dot * 180}ms` }} />)}
+                      <span className="sr-only">Administrador está digitando</span>
+                    </div>
+                  )}
                 </div>
               </ScrollArea>
               <form onSubmit={(event) => void sendReply(event)} className="flex gap-2 border-t p-4">
-                <Input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Responder ao usuário..." maxLength={1000} aria-label="Resposta do administrador" />
-                <Button type="submit" size="icon" aria-label="Enviar resposta" disabled={!draft.trim() || sending}><Send className="h-4 w-4" /></Button>
+                <Input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Escreva uma resposta clara e acolhedora..." maxLength={1000} aria-label="Resposta do administrador" disabled={Boolean(selected.closedAt)} />
+                <Button type="submit" size="icon" aria-label="Enviar resposta" disabled={!draft.trim() || sending || Boolean(selected.closedAt)}><Send className="h-4 w-4" /></Button>
               </form>
             </>
           ) : <div className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">Selecione uma conversa para responder.</div>}

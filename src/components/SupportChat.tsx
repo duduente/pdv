@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { Headphones, MessageCircle, Send, Sparkles, X } from 'lucide-react';
+import { Headphones, MessageCircle, Paperclip, Send, Sparkles, X } from 'lucide-react';
 import { useAuth } from '@/auth/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { SupportAttachmentLink } from '@/components/SupportAttachmentLink';
 import { cn } from '@/lib/utils';
 import {
   addSupportMessage,
   appendSupportMessage,
   createSupportConversation,
+  getSupportAttachmentMimeType,
   getKitoAnswer,
   listSupportConversations,
   requestHumanSupport,
   subscribeToLocalSupportChanges,
+  uploadSupportAttachment,
   waitForKitoResponse,
   type SupportConversation,
 } from '@/lib/supportChat';
@@ -25,12 +28,20 @@ export function SupportChat({ establishmentId, establishmentName }: {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
+  const [file, setFile] = useState<File | null>(null);
   const [conversation, setConversation] = useState<SupportConversation | null>(null);
   const [sending, setSending] = useState(false);
   const [kitoTyping, setKitoTyping] = useState(false);
   const messageListRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const loadErrorShown = useRef(false);
-  const isHuman = Boolean(conversation?.humanRequestedAt);
+  const knownConversation = useRef<{
+    id: string;
+    messageIds: Set<string>;
+    adminJoinedAt: string | null;
+    closedAt: string | null;
+  } | null>(null);
+  const isHuman = Boolean(conversation?.humanRequestedAt && !conversation.closedAt);
 
   const refresh = useCallback(async () => {
     if (!user || user.role === 'super-admin') return;
@@ -41,7 +52,32 @@ export function SupportChat({ establishmentId, establishmentName }: {
         userId: user.id,
         establishmentId,
       });
-      setConversation(conversations[0] ?? null);
+      const current = conversations[0] ?? null;
+      if (current) {
+        const known = knownConversation.current;
+        if (known?.id === current.id) {
+          if (current.adminJoinedAt && current.adminJoinedAt !== known.adminJoinedAt) {
+            toast.info('Um administrador entrou no atendimento.');
+          }
+          if (current.closedAt && current.closedAt !== known.closedAt) {
+            toast.info('O atendimento foi finalizado.');
+          }
+          if (current.messages.some((message) =>
+            message.sender === 'admin' && !known.messageIds.has(message.id),
+          )) {
+            toast.info('Você recebeu uma resposta da equipe de suporte.');
+          }
+        }
+        knownConversation.current = {
+          id: current.id,
+          messageIds: new Set(current.messages.map((message) => message.id)),
+          adminJoinedAt: current.adminJoinedAt,
+          closedAt: current.closedAt,
+        };
+      } else {
+        knownConversation.current = null;
+      }
+      setConversation(current);
       loadErrorShown.current = false;
     } catch (error) {
       if (!loadErrorShown.current) {
@@ -69,7 +105,7 @@ export function SupportChat({ establishmentId, establishmentName }: {
   if (!user || user.role === 'super-admin') return null;
 
   const ensureConversation = async () => {
-    if (conversation) return conversation;
+    if (conversation && !conversation.closedAt) return conversation;
     const created = await createSupportConversation({
       isDemo: Boolean(user.isDemo),
       establishmentId,
@@ -84,11 +120,20 @@ export function SupportChat({ establishmentId, establishmentName }: {
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
     const body = draft.trim();
-    if (!body || sending) return;
+    if ((!body && !file) || sending) return;
     setSending(true);
     setDraft('');
+    const selectedFile = file;
+    setFile(null);
     try {
       const activeConversation = await ensureConversation();
+      const attachment = selectedFile
+        ? await uploadSupportAttachment({
+            isDemo: Boolean(user.isDemo),
+            conversationId: activeConversation.id,
+            file: selectedFile,
+          })
+        : null;
       const sentMessage = await addSupportMessage({
         isDemo: Boolean(user.isDemo),
         conversationId: activeConversation.id,
@@ -96,11 +141,12 @@ export function SupportChat({ establishmentId, establishmentName }: {
         senderId: user.id,
         senderName: user.displayName,
         body,
+        attachment,
       });
       setConversation((current) => current && current.id === activeConversation.id
         ? appendSupportMessage(current, sentMessage)
         : current);
-      if (!activeConversation.humanRequestedAt) {
+      if (body && (!activeConversation.humanRequestedAt || activeConversation.closedAt)) {
         setKitoTyping(true);
         await waitForKitoResponse();
         await addSupportMessage({
@@ -115,6 +161,7 @@ export function SupportChat({ establishmentId, establishmentName }: {
       await refresh();
     } catch (error) {
       setDraft(body);
+      setFile(selectedFile);
       toast.error(error instanceof Error ? error.message : 'Não foi possível enviar a mensagem.');
     } finally {
       setKitoTyping(false);
@@ -168,30 +215,47 @@ export function SupportChat({ establishmentId, establishmentName }: {
                 </div>
               )}
               {conversation?.humanRequestedAt && (
-                <p className="rounded-md bg-primary/10 px-3 py-2 text-xs text-primary">Esta conversa está com o Suporte Humano.</p>
+                <p className="rounded-md bg-primary/10 px-3 py-2 text-xs text-primary">
+                  {conversation.closedAt ? 'Este atendimento foi finalizado. Envie uma nova mensagem para iniciar outro.' : 'Esta conversa está com o Suporte Humano.'}
+                </p>
+              )}
+              {conversation?.adminJoinedAt && conversation.humanRequestedAt && (
+                <p className="rounded-md bg-sky-50 px-3 py-2 text-xs text-sky-800 dark:bg-sky-950/50 dark:text-sky-100">
+                  A equipe de suporte entrou nesta conversa.
+                </p>
               )}
               {conversation?.messages.map((message) => (
                 <div key={message.id} className={cn(
                   'max-w-[90%] rounded-lg px-3 py-2 text-sm',
                   message.sender === 'merchant' ? 'ml-auto bg-primary text-primary-foreground' : 'bg-muted',
+                  message.sender === 'admin' && 'border border-sky-200 bg-sky-50 text-slate-800 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-50',
                   message.sender === 'system' && 'mx-auto max-w-full bg-transparent text-center text-xs text-muted-foreground',
                 )}>
-                  {message.sender !== 'merchant' && message.sender !== 'system' && <p className="mb-1 text-[11px] font-semibold opacity-75">{message.senderName}</p>}
+                  {message.sender !== 'merchant' && message.sender !== 'system' && (
+                    <p className="mb-1 text-[11px] font-semibold opacity-75">
+                      {message.sender === 'admin' ? 'Equipe de suporte' : message.senderName}
+                    </p>
+                  )}
                   <p className="whitespace-pre-wrap">{message.body}</p>
+                  {message.attachment && <SupportAttachmentLink attachment={message.attachment} isDemo={Boolean(user.isDemo)} />}
                 </div>
               ))}
-              {kitoTyping && !isHuman && (
-                <div className="flex w-fit items-center gap-1.5 rounded-lg bg-muted px-3 py-3" role="status" aria-label="Kito AI está digitando">
+              {(kitoTyping && !isHuman) || (
+                conversation?.adminTypingAt
+                && !conversation.closedAt
+                && Date.now() - Date.parse(conversation.adminTypingAt) < 12_000
+              ) ? (
+                <div className="flex w-fit items-center gap-1.5 rounded-lg bg-muted px-3 py-3" role="status" aria-label={isHuman ? 'Administrador está digitando' : 'Kito AI está digitando'}>
                   {[0, 1, 2].map((dot) => (
                     <span
                       key={dot}
-                      className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground motion-reduce:animate-none"
-                      style={{ animationDelay: `${dot * 150}ms` }}
+                      className="typing-dot h-2 w-2 rounded-full bg-muted-foreground"
+                      style={{ animationDelay: `${dot * 180}ms` }}
                     />
                   ))}
-                  <span className="sr-only">Kito AI está digitando</span>
+                  <span className="sr-only">{isHuman ? 'Administrador está digitando' : 'Kito AI está digitando'}</span>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -204,8 +268,36 @@ export function SupportChat({ establishmentId, establishmentName }: {
           )}
           <form onSubmit={(event) => void sendMessage(event)} className="flex gap-2 p-4">
             <Input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Digite sua dúvida..." maxLength={1000} aria-label="Mensagem do chat" />
-            <Button type="submit" size="icon" aria-label="Enviar mensagem" disabled={!draft.trim() || sending}><Send className="h-4 w-4" /></Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf,image/jpeg,.pdf,.jpg,.jpeg"
+              className="sr-only"
+              aria-label="Anexar PDF ou JPEG"
+              onChange={(event) => {
+                const selectedFile = event.target.files?.[0];
+                event.target.value = '';
+                if (!selectedFile) return;
+                try {
+                  getSupportAttachmentMimeType(selectedFile);
+                  setFile(selectedFile);
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : 'Não foi possível anexar o arquivo.');
+                }
+              }}
+            />
+            <Button type="button" size="icon" variant="outline" aria-label="Anexar PDF ou JPEG" disabled={sending} onClick={() => fileInputRef.current?.click()}>
+              <Paperclip className="h-4 w-4" />
+            </Button>
+            {file && <span className="sr-only" aria-live="polite">Anexo selecionado: {file.name}</span>}
+            <Button type="submit" size="icon" aria-label="Enviar mensagem" disabled={(!draft.trim() && !file) || sending}><Send className="h-4 w-4" /></Button>
           </form>
+          {file && (
+            <div className="flex items-center justify-between border-t px-4 py-2 text-xs text-muted-foreground">
+              <span className="truncate">{file.name}</span>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setFile(null)}>Remover</Button>
+            </div>
+          )}
         </Card>
       )}
       <Button type="button" className="h-12 rounded-full px-5 shadow-lg" onClick={() => setOpen((value) => !value)}>
