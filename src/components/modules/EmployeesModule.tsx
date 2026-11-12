@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { CurrencyInput } from '@/components/ui/currency-input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
+import { Download } from 'lucide-react';
 
 const EMPTY_EMPLOYEES: EmployeeRecords = { employees: [], consumptions: [], settlements: [] };
 const EMPTY_REGISTER: CashRegisterData = { activeSessionId: null, sessions: [], sales: [], movements: [] };
@@ -64,7 +65,10 @@ export function EmployeesModule() {
   const [dueDate, setDueDate] = useState(() => localDate(new Date()));
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const [exporting, setExporting] = useState(false);
+  const exportingRef = useRef(false);
   const records = finances.employees ?? EMPTY_EMPLOYEES;
+  const visibleConsumptions = records.consumptions.filter((entry) => !selectedId || entry.employeeId === selectedId);
   const employee = records.employees.find((entry) => entry.id === selectedId);
   let preview: EmployeeMonthlySettlement | null = null;
   let previewError = '';
@@ -273,6 +277,26 @@ export function EmployeesModule() {
     await commit([{ snapshot: { ...financesSnapshot, value: finances }, value: updatedFinances, write: true }], () => setFinances(updatedFinances));
   };
 
+  const exportConsumptions = async () => {
+    if (!selectedEstablishment || !ready || !visibleConsumptions.length || exportingRef.current) return;
+    exportingRef.current = true;
+    setExporting(true);
+    try {
+      const { downloadEmployeeConsumptionReport } = await import('@/lib/reportExport');
+      await downloadEmployeeConsumptionReport({
+        establishmentName: selectedEstablishment.name,
+        employees: records.employees,
+        consumptions: visibleConsumptions,
+      });
+      toast.success('Consumos exportados para Excel.');
+    } catch (error) {
+      toast.error(error instanceof Error ? `Não foi possível exportar os consumos: ${error.message}` : 'Não foi possível exportar os consumos.');
+    } finally {
+      exportingRef.current = false;
+      setExporting(false);
+    }
+  };
+
   if (!selectedEstablishment) return null;
   return (
     <div className="space-y-4">
@@ -306,10 +330,11 @@ export function EmployeesModule() {
             {source === 'menu' && <p className="text-xs text-muted-foreground">Itens do cardápio não baixam estoque automaticamente.</p>}
             <Button type="submit" disabled={!ready}>Lançar consumo</Button>
           </form></Card>
-          <Card className="divide-y p-4">{records.consumptions.filter((entry) => !selectedId || entry.employeeId === selectedId).map((entry) => {
+          <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-muted-foreground">A planilha inclui os consumos exibidos, inclusive os cancelados.</p><Button type="button" variant="outline" onClick={() => void exportConsumptions()} disabled={!ready || !visibleConsumptions.length || exporting}><Download className="mr-2 h-4 w-4" />{exporting ? 'Exportando...' : 'Exportar Excel'}</Button></div>
+          <Card className="divide-y p-4">{visibleConsumptions.map((entry) => {
             const net = calculateEmployeeSettlement({ salaryCents: 0, sales: [], consumptions: [entry], cancelledCommissions: [], carriedDebtCents: 0 }).consumptionCents;
             return <div key={entry.consumptionId} className="flex items-center justify-between gap-3 py-2 text-sm"><div><p>{entry.description} · {entry.createdAt} · {records.employees.find((item) => item.id === entry.employeeId)?.name} {entry.cancelled && '· Cancelado'}</p><p className="text-muted-foreground">{formatCurrency(entry.amountCents / 100)} · desconto {entry.discountPercent}% · líquido {formatCurrency(net / 100)}</p></div>{!entry.cancelled && <Button type="button" size="sm" variant="outline" disabled={!ready} onClick={() => cancelConsumption(entry.consumptionId)}>Cancelar</Button>}</div>;
-          })}{!records.consumptions.length && <p className="text-sm text-muted-foreground">Nenhum consumo lançado.</p>}</Card>
+          })}{!visibleConsumptions.length && <p className="text-sm text-muted-foreground">Nenhum consumo lançado para a seleção.</p>}</Card>
         </TabsContent>
         <TabsContent value="commissions" className="space-y-4">
           <Card className="p-4"><p className="text-sm text-muted-foreground">Selecione o funcionário responsável ao registrar a venda no caixa ou finalizar o pagamento do delivery. A comissão usa o percentual registrado no momento da venda.</p>

@@ -11,16 +11,18 @@ const fixtures = vi.hoisted(() => ({
   listStoreUsers: vi.fn(async () => []),
   remote: false,
   commit: vi.fn(),
+  exportConsumptions: vi.fn(),
 }));
 
 vi.mock('@/store', () => ({
-  useApp: () => ({ selectedEstablishment: { id: 'store', slug: 'test', modules: { estoque: true, cardapio: false } } }),
+  useApp: () => ({ selectedEstablishment: { id: 'store', name: 'Loja teste', slug: 'test', modules: { estoque: true, cardapio: false } } }),
 }));
 vi.mock('@/auth/AuthContext', () => ({
   useAuth: () => ({ user: { role: 'super-admin', isDemo: !fixtures.remote }, listStoreUsers: fixtures.listStoreUsers }),
 }));
 vi.mock('@/lib/supabase', () => ({ supabase: {} }));
 vi.mock('@/lib/atomicEmployeeRecords', () => ({ commitEmployeeRecords: fixtures.commit }));
+vi.mock('@/lib/reportExport', () => ({ downloadEmployeeConsumptionReport: fixtures.exportConsumptions }));
 vi.mock('@/hooks/usePersistentState', () => ({
   PERSISTENT_STATE_ERROR_EVENT: 'app:persistent-state-error',
   PERSISTENT_STATE_SAVED_EVENT: 'app:persistent-state-saved',
@@ -91,6 +93,7 @@ describe('employee integration', () => {
     fixtures.error.mockClear();
     fixtures.remote = false;
     fixtures.commit.mockReset();
+    fixtures.exportConsumptions.mockReset();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -142,6 +145,27 @@ describe('employee integration', () => {
     await act(async () => { root.render(<EmployeesModule />); });
     expect(container.textContent).not.toContain('Modo demonstração: dados locais');
     expect(container.textContent).not.toContain('Versão para testes');
+  });
+
+  it('exports the visible consumptions and reports export failures', async () => {
+    const finances = fixtures.values['store-finances:store'] as { employees: { consumptions: unknown[] } };
+    finances.employees.consumptions.push(
+      { consumptionId: 'one', employeeId: 'employee', month: '2020-11', amountCents: 500, discountPercent: 0 },
+      { consumptionId: 'two', employeeId: 'other', month: '2020-11', amountCents: 600, discountPercent: 0, cancelled: true },
+    );
+    await act(async () => { root.render(<EmployeesModule />); });
+    await act(async () => { button(container, 'Exportar Excel').click(); });
+    expect(fixtures.exportConsumptions).toHaveBeenLastCalledWith(expect.objectContaining({
+      establishmentName: 'Loja teste',
+      consumptions: expect.arrayContaining([expect.objectContaining({ consumptionId: 'one' }), expect.objectContaining({ consumptionId: 'two', cancelled: true })]),
+    }));
+    await act(async () => { setField(field(container, 'Funcionário'), 'employee'); });
+    fixtures.exportConsumptions.mockRejectedValueOnce(new Error('erro no arquivo'));
+    await act(async () => { button(container, 'Exportar Excel').click(); });
+    expect(fixtures.exportConsumptions).toHaveBeenLastCalledWith(expect.objectContaining({
+      consumptions: [expect.objectContaining({ consumptionId: 'one' })],
+    }));
+    expect(fixtures.error).toHaveBeenCalledWith('Não foi possível exportar os consumos: erro no arquivo');
   });
 
   it('creates an employee and publishes only the sales roster fields', async () => {

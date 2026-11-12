@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import type { AuditEvent, CashExpense, CashMovement, CashSale } from '@/types';
+import { calculateEmployeeSettlement, type EmployeeConsumption, type EmployeeProfile } from '@/lib/employeeSettlement';
 
 export interface FinancialReportExportData {
   establishmentName: string;
@@ -20,12 +21,12 @@ export interface FinancialReportExportData {
   };
 }
 
-function downloadBlob(blob: Blob, establishmentName: string, periodDescription: string, extension: string) {
+function downloadBlob(blob: Blob, establishmentName: string, periodDescription: string, extension: string, prefix = 'relatorio') {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   const safeName = establishmentName.trim().replace(/[^a-z0-9-_]+/gi, '-').replace(/^-|-$/g, '') || 'estabelecimento';
   anchor.href = url;
-  anchor.download = `relatorio-${safeName}-${periodDescription.replace(/[^0-9a-z-]+/gi, '-')}.${extension}`;
+  anchor.download = `${prefix}-${safeName}-${periodDescription.replace(/[^0-9a-z-]+/gi, '-')}.${extension}`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -157,4 +158,46 @@ export async function downloadFinancialReport(data: FinancialReportExportData) {
   const workbook = await createFinancialReportWorkbook(data);
   const blob = new Blob([workbook], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   downloadBlob(blob, data.establishmentName, data.periodDescription, 'xlsx');
+}
+
+export async function createEmployeeConsumptionWorkbook(data: {
+  establishmentName: string;
+  employees: EmployeeProfile[];
+  consumptions: EmployeeConsumption[];
+}): Promise<Uint8Array> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'PDV';
+  workbook.created = new Date();
+  workbook.title = `Consumos de funcionários - ${data.establishmentName}`;
+  const employees = new Map(data.employees.map((employee) => [employee.id, employee.name]));
+  const sheet = workbook.addWorksheet('Consumos');
+  formatRows(sheet, ['Funcionário', 'Data', 'Mês', 'Descrição', 'Valor bruto (R$)', 'Desconto (%)', 'Valor líquido (R$)', 'Status', 'ID do consumo'], data.consumptions.map((consumption) => {
+    const net = calculateEmployeeSettlement({
+      salaryCents: 0, sales: [], consumptions: [consumption], cancelledCommissions: [], carriedDebtCents: 0,
+    }).consumptionCents;
+    return [
+      employees.get(consumption.employeeId) ?? `Funcionário não encontrado (${consumption.employeeId})`,
+      consumption.createdAt ?? '',
+      consumption.month,
+      consumption.description ?? '',
+      consumption.amountCents / 100,
+      consumption.discountPercent,
+      net / 100,
+      consumption.cancelled ? 'Cancelado' : 'Ativo',
+      consumption.consumptionId,
+    ];
+  }));
+  [5, 7].forEach((column) => { sheet.getColumn(column).numFmt = '"R$" #,##0.00;[Red]-"R$" #,##0.00'; });
+  const buffer = await workbook.xlsx.writeBuffer();
+  return new Uint8Array(buffer);
+}
+
+export async function downloadEmployeeConsumptionReport(data: {
+  establishmentName: string;
+  employees: EmployeeProfile[];
+  consumptions: EmployeeConsumption[];
+}) {
+  const bytes = await createEmployeeConsumptionWorkbook(data);
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  downloadBlob(blob, data.establishmentName, new Date().toISOString().slice(0, 10), 'xlsx', 'consumos');
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import ExcelJS from 'exceljs';
-import { createFinancialReportBackup, createFinancialReportWorkbook } from './reportExport';
+import { createEmployeeConsumptionWorkbook, createFinancialReportBackup, createFinancialReportWorkbook } from './reportExport';
 
 describe('exportação de relatórios Excel', () => {
   const report = {
@@ -29,6 +29,26 @@ describe('exportação de relatórios Excel', () => {
     expect(backup.version).toBe(1);
     expect(backup.establishmentName).toBe(report.establishmentName);
     expect(backup.sales).toEqual([]);
+  });
+
+  it('exports consumption amounts, rounded discounts and cancelled status', async () => {
+    const bytes = await createEmployeeConsumptionWorkbook({
+      establishmentName: 'Loja Teste',
+      employees: [{ id: 'e1', name: 'Ana', salaryCents: 0, commissionPercent: 0, consumptionDiscountPercent: 0, active: true }],
+      consumptions: [
+        { consumptionId: 'c1', employeeId: 'e1', month: '2026-11', createdAt: '2026-11-09', description: 'Produto × 1', amountCents: 999, discountPercent: 12.5 },
+        { consumptionId: 'c2', employeeId: 'missing', month: '2026-11', amountCents: 500, discountPercent: 0, cancelled: true },
+      ],
+    });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(bytes);
+    const sheet = workbook.getWorksheet('Consumos');
+    expect(Array.from({ length: 9 }, (_, index) => sheet?.getRow(2).getCell(index + 1).value)).toEqual([
+      'Ana', '2026-11-09', '2026-11', 'Produto × 1', 9.99, 12.5, 8.74, 'Ativo', 'c1',
+    ]);
+    expect(sheet?.getCell('A3').value).toBe('Funcionário não encontrado (missing)');
+    expect(sheet?.getCell('G3').value).toBe(5);
+    expect(sheet?.getCell('H3').value).toBe('Cancelado');
   });
 
   it('gera planilhas de resumo, vendas, despesas e entregadores', async () => {
