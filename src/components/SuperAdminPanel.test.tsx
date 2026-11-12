@@ -39,3 +39,20 @@ it('keeps support mounted with a badge and separates users and support from stor
   await act(async () => root.unmount());
   container.remove();
 });
+
+it('enables finance and employees by default when creating a store', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<SuperAdminPanel />));
+  const create = [...container.querySelectorAll('button')].find((item) => item.textContent?.includes('Nova loja'));
+  await act(async () => create?.click());
+  const dialog = document.querySelector('[role="dialog"]');
+  for (const name of ['Finanças', 'Funcionários']) {
+    const label = [...(dialog?.querySelectorAll('label') ?? [])].find((item) => item.textContent?.includes(name));
+    expect(label?.querySelector('[role="switch"]')?.getAttribute('aria-checked')).toBe('true');
+  }
+  await act(async () => root.unmount());
+  container.remove();
+});

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react';
+import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useState, type SetStateAction } from 'react';
@@ -38,12 +38,6 @@ vi.mock('@/hooks/usePersistentState', () => ({
     fixtures.setters[key] = (next) => setValue(next as T);
     return [value, (next: SetStateAction<T>) => setValue(next), true, { key, value, exists: true }];
   },
-}));
-vi.mock('@/components/ui/tabs', () => ({
-  Tabs: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  TabsContent: ({ children, value }: { children: ReactNode; value: string }) => value === fixtures.tab ? <div>{children}</div> : null,
-  TabsList: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  TabsTrigger: ({ children }: { children: ReactNode }) => <span>{children}</span>,
 }));
 vi.mock('@/components/modules/PaymentDialog', () => ({
   PaymentDialog: ({ open, total, onConfirm }: { open: boolean; total: number; onConfirm: (splits: PaymentSplit[], change: number) => void }) =>
@@ -103,6 +97,7 @@ it('commits a stock sale, movement and employee commission together', async () =
 
 const command = {
   id: 'command', establishmentId: 'store', number: 1, status: 'open',
+  name: 'Mesa 4', customerName: 'Ana',
   items: [{ productId: 'item', name: 'Café', price: 10, quantity: 1 }], total: 10,
 };
 const appointment = {
@@ -141,6 +136,33 @@ async function click(container: HTMLElement, text: string) {
   await act(async () => { button.click(); });
 }
 
+async function selectReportTab(container: HTMLElement, label: string) {
+  const tab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((item) => item.textContent === label);
+  if (!tab) throw new Error(`Aba não encontrada: ${label}`);
+  await act(async () => tab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })));
+}
+
+it('separates report details while retaining the selected period', async () => {
+  setupRecords();
+  fixtures.tab = 'reports';
+  const { container, cleanup } = await renderCash();
+  expect(container.textContent).toContain('Vendas e despesas no período');
+  expect(container.textContent).not.toContain('Despesas do período');
+  await click(container, 'Semanal');
+  await selectReportTab(container, 'Despesas');
+  expect(container.textContent).toContain('Despesas do período');
+  expect(container.textContent).not.toContain('Vendas e despesas no período');
+  expect(container.textContent).toContain('Semanal');
+  await selectReportTab(container, 'Pagamentos e origens');
+  expect(container.textContent).toContain('Por forma de pagamento');
+  expect(container.textContent).toContain('Por origem');
+  await selectReportTab(container, 'Entregas');
+  expect(container.textContent).toContain('Delivery por entregador');
+  await selectReportTab(container, 'Vendas');
+  expect(container.textContent).toContain('Vendas do período');
+  await cleanup();
+});
+
 it.each([
   ['comanda', 'Cobrar comanda', 'commands:store', { status: 'paid' }],
   ['agendamento', 'Cliente teste', 'appointments:store', { status: 'completed', paymentStatus: 'paid' }],
@@ -148,12 +170,18 @@ it.each([
   setupRecords();
   const { container, cleanup } = await renderCash();
   await selectOrigin(container, origin);
+  if (origin === 'comanda') expect(container.textContent).toContain('Comanda 1 · Mesa 4 · Ana');
   await click(container, button);
   await click(container, 'Informar pagamento');
   await click(container, 'Confirmar teste');
   expect(fixtures.commit).toHaveBeenCalledOnce();
   const operations = fixtures.commit.mock.calls[0][1];
   expect(operations.find((entry) => entry.snapshot.key === 'cash-register:store')?.value).toMatchObject({ sales: [{ origin, total: 10 }] });
+  if (origin === 'comanda') {
+    expect(operations.find((entry) => entry.snapshot.key === 'cash-register:store')?.value).toMatchObject({
+      sales: [{ commandId: 'command', commandNumber: 1, paymentMethod: 'pix', paymentSplits: [{ method: 'pix', amount: 10 }] }],
+    });
+  }
   expect(operations.find((entry) => entry.snapshot.key === key)?.value).toMatchObject([expected]);
   await cleanup();
 });
@@ -206,6 +234,7 @@ it.each([
   vi.spyOn(window, 'confirm').mockReturnValue(true);
   vi.spyOn(window, 'prompt').mockReturnValue('teste');
   const { container, cleanup } = await renderCash();
+  await selectReportTab(container, 'Vendas');
   await click(container, 'Estornar');
   expect(fixtures.commit).toHaveBeenCalledOnce();
   const operations = fixtures.commit.mock.calls[0][1];
@@ -233,6 +262,7 @@ it.each([
   vi.spyOn(window, 'confirm').mockReturnValue(true);
   vi.spyOn(window, 'prompt').mockReturnValue('teste');
   const { container, cleanup } = await renderCash();
+  await selectReportTab(container, 'Vendas');
   const button = container.querySelector<HTMLButtonElement>('[aria-label^="Excluir venda"]');
   if (!button) throw new Error('Botão de exclusão não encontrado');
   await act(async () => { button.click(); });

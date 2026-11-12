@@ -432,8 +432,8 @@ function CreateEstablishmentModal({
     estoque: false,
     comandas: false,
     delivery: false,
-    finance: false,
-    employees: false,
+    finance: true,
+    employees: true,
   });
   const [error, setError] = useState('');
 

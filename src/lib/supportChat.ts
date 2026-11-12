@@ -681,25 +681,25 @@ const HELP_ANSWERS: HelpAnswer[] = [
       'anotar consumo', 'abrir uma conta pro cliente', 'deixar pendurado na comanda',
       'juntar consumo pra pagar depois',
     ],
-    answer: 'Abra Comandas e clique em Nova comanda. Selecione uma comanda aberta, adicione itens do Cardápio ou informe um item e valor manualmente; ajuste as quantidades nos botões +/−. Para receber, vá a Frente de Caixa → Vendas, escolha Comanda e cobre a comanda aberta.',
+    answer: 'Abra Comandas e clique em Nova comanda. Um clique mostra os itens; dois cliques ou o botão Editar abrem a edição do nome, dados opcionais do cliente e itens. Salve as alterações. Para receber, vá a Frente de Caixa → Vendas, escolha Comanda e cobre a comanda aberta.',
   },
   {
     keywords: [
       'configurar agendamento', 'horario de funcionamento', 'horarios de atendimento', 'duracao do agendamento',
       'mudar horario de atendimento', 'alterar horario', 'dia que abre', 'dia que atende',
     ],
-    answer: 'Abra Agendamentos → Configurações. Ative os dias de atendimento, defina os horários de início e fim e ajuste a duração padrão dos atendimentos. Salve as configurações para aplicar.',
+    answer: 'Abra Configurações da loja → Agendamentos → Horários. Ative os dias de atendimento, defina os horários de início e fim e ajuste a duração padrão dos atendimentos.',
   },
   {
     keywords: [
       'cadastrar servico', 'novo servico', 'preco do servico', 'duracao do servico', 'cobrar servico',
       'vender servico', 'colocar um servico novo', 'adicionar um corte', 'mudar o valor do corte',
     ],
-    answer: 'Em Agendamentos → Serviços, informe nome, preço e duração e clique em Adicionar serviço. Para remover um serviço, use o ícone de lixeira correspondente.',
+    answer: 'Em Configurações da loja → Agendamentos → Serviços, informe nome, preço e duração e clique em Adicionar serviço. Para remover um serviço, use o ícone de lixeira correspondente.',
   },
   {
     keywords: ['cadastrar profissional', 'adicionar profissional', 'remover profissional', 'colocar funcionario', 'adicionar barbeiro'],
-    answer: 'Em Agendamentos → Profissionais, informe nome e cargo e clique em Adicionar. Use a lixeira para remover um profissional.',
+    answer: 'Em Configurações da loja → Agendamentos → Profissionais, informe nome e cargo e clique em Adicionar. Use a lixeira para remover um profissional.',
   },
   {
     keywords: [
@@ -708,7 +708,7 @@ const HELP_ANSWERS: HelpAnswer[] = [
       'agenda do dia', 'historico de agendamentos', 'remarcar horario', 'trocar horario do cliente',
       'desmarcar cliente', 'mudar o horario marcado',
     ],
-    answer: 'Em Agendamentos → Agendamentos, selecione a data para ver a agenda daquele dia. Ative o histórico para ver outros atendimentos e use o lápis para editar dados, horário ou status. O pagamento é atualizado pelo caixa; para cobrar, escolha a origem Agendamento em Frente de Caixa → Vendas.',
+    answer: 'Em Agendamentos, selecione a data para ver a agenda daquele dia. Ative o histórico para ver outros atendimentos e use o lápis para editar dados, horário ou status. O pagamento é atualizado pelo caixa; para cobrar, escolha a origem Agendamento em Frente de Caixa → Vendas.',
   },
   {
     keywords: [
@@ -730,7 +730,7 @@ const HELP_ANSWERS: HelpAnswer[] = [
       'anotar pedido', 'pedido que veio pelo telefone', 'pedido que chegou no whatsapp',
       'cliente vai buscar', 'cliente vai retirar', 'mandar pelo motoboy',
     ],
-    answer: 'Abra Delivery → Novo pedido e escolha claramente ENTREGA ou RETIRADA. Informe os dados do cliente, adicione itens do Cardápio ou um item manual e confirme o pagamento informado. Entrega exige endereço e pode ter taxa; retirada não cobra taxa.',
+    answer: 'Abra Delivery → Novo pedido. Primeiro escolha ENTREGA ou RETIRADA e informe os dados do cliente; depois adicione itens do Cardápio ou um item manual; por último informe as formas de pagamento e crie o pedido. Entrega exige endereço e pode ter taxa; retirada não cobra taxa. O recebimento é confirmado depois, no caixa.',
   },
   {
     keywords: ['cancelar pedido delivery', 'cancelar pedido de entrega', 'excluir pedido delivery'],

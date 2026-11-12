@@ -1,8 +1,11 @@
-import { useState } from 'react';
-import { CalendarClock, ClipboardList, Minus, Plus, Receipt, Trash2, Users } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { CalendarClock, ClipboardList, Minus, Pencil, Plus, Receipt, Trash2, Users } from 'lucide-react';
 import { useApp } from '@/store';
+import { useAuth } from '@/auth/AuthContext';
 import { menuItems as initialMenuItems, formatCurrency } from '@/mockData';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { syncPersistentState, usePersistentState } from '@/hooks/usePersistentState';
+import { commitEmployeeRecords } from '@/lib/atomicEmployeeRecords';
+import { supabase } from '@/lib/supabase';
 import type { Command, MenuItem, SaleItem, TableReservation } from '@/types';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -12,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { createTableReservation, sortTableReservations } from '@/lib/tableReservations';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 function createId() {
   return globalThis.crypto?.randomUUID?.() ?? `command-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -32,13 +36,18 @@ function getLocalDateTimeNow() {
 
 export function CommandsModule() {
   const { selectedEstablishment } = useApp();
+  const { user } = useAuth();
   const establishmentId = selectedEstablishment?.id ?? 'default';
-  const [commands, setCommands, commandsLoaded] = usePersistentState<Command[]>(`commands:${establishmentId}`, []);
+  const [commands, setCommands, commandsLoaded, commandsSnapshot] = usePersistentState<Command[]>(`commands:${establishmentId}`, []);
   const [menuItems] = usePersistentState<MenuItem[]>(
     `menu-items:${establishmentId}`,
     selectedEstablishment?.slug === 'burger-house' ? initialMenuItems : [],
   );
   const [selectedId, setSelectedId] = useState('');
+  const [draft, setDraft] = useState<Command | null>(null);
+  const [draftVersion, setDraftVersion] = useState('');
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [itemName, setItemName] = useState('');
   const [itemPrice, setItemPrice] = useState('');
   const [reservationDateTime, setReservationDateTime] = useState(getDefaultReservationDateTime);
@@ -47,8 +56,7 @@ export function CommandsModule() {
   const [reservationPartySize, setReservationPartySize] = useState('2');
   const [reservationTable, setReservationTable] = useState('');
   const [reservationNotes, setReservationNotes] = useState('');
-  const selectedCommand = commands.find((command) => command.id === selectedId && command.status === 'open')
-    ?? commands.find((command) => command.status === 'open');
+  const selectedCommand = commands.find((command) => command.id === selectedId);
   const openCommands = commands.filter((command) => command.status === 'open').sort((a, b) => a.number - b.number);
   const total = selectedCommand?.items.reduce((sum, item) => sum + item.price * item.quantity, 0) ?? 0;
   const [reservations, setReservations] = usePersistentState<TableReservation[]>(`table-reservations:${establishmentId}`, []);
@@ -72,32 +80,72 @@ export function CommandsModule() {
     toast.success(`Comanda ${command.number} criada`);
   };
 
+  const openEditor = (command: Command) => {
+    setSelectedId(command.id);
+    setDraft({ ...command, items: command.items.map((item) => ({ ...item })) });
+    setDraftVersion(JSON.stringify(command));
+    setItemName('');
+    setItemPrice('');
+  };
+
   const addItem = (item: SaleItem) => {
-    if (!selectedCommand) {
-      toast.error('Crie ou selecione uma comanda aberta');
-      return;
-    }
-    setCommands((current) => current.map((command) => {
-      if (command.id !== selectedCommand.id) return command;
+    setDraft((command) => {
+      if (!command) return command;
       const existing = command.items.find((entry) => entry.productId === item.productId);
       const items = existing
         ? command.items.map((entry) => entry.productId === item.productId ? { ...entry, quantity: entry.quantity + 1 } : entry)
         : [...command.items, item];
       return { ...command, items, total: items.reduce((sum, entry) => sum + entry.price * entry.quantity, 0) };
-    }));
+    });
   };
 
   const updateQuantity = (item: SaleItem, delta: number) => {
-    if (!selectedCommand) return;
-    setCommands((current) => current.map((command) => {
-      if (command.id !== selectedCommand.id) return command;
+    setDraft((command) => {
+      if (!command) return command;
       const items = command.items
         .map((entry) => entry.productId === item.productId
           ? { ...entry, quantity: entry.quantity + delta }
           : entry)
         .filter((entry) => entry.quantity > 0);
       return { ...command, items, total: items.reduce((sum, entry) => sum + entry.price * entry.quantity, 0) };
-    }));
+    });
+  };
+
+  const saveDraft = async () => {
+    if (!draft || savingRef.current) return;
+    const currentCommand = commands.find((command) => command.id === draft.id);
+    if (!currentCommand || currentCommand.status !== 'open' || JSON.stringify(currentCommand) !== draftVersion) {
+      toast.error('A comanda foi alterada ou fechada. Abra a edição novamente.');
+      return;
+    }
+    const updated: Command = {
+      ...draft,
+      name: draft.name?.trim() || undefined,
+      customerName: draft.customerName?.trim() || undefined,
+      customerPhone: draft.customerPhone?.trim() || undefined,
+      notes: draft.notes?.trim() || undefined,
+    };
+    const nextCommands = commands.map((command) => command.id === draft.id ? updated : command);
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      if (supabase && user && !user.isDemo) {
+        if (JSON.stringify(commandsSnapshot.value) !== JSON.stringify(commands)) {
+          throw new Error('Aguarde a gravação da comanda e tente novamente.');
+        }
+        await commitEmployeeRecords(establishmentId, [{ snapshot: commandsSnapshot, value: nextCommands, write: true }]);
+        syncPersistentState(`commands:${establishmentId}`, nextCommands);
+      } else {
+        setCommands(nextCommands);
+      }
+      setDraft(null);
+      toast.success('Comanda atualizada');
+    } catch (reason) {
+      toast.error(reason instanceof Error ? reason.message : 'Não foi possível salvar a comanda.');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   const addManualItem = () => {
@@ -174,28 +222,30 @@ export function CommandsModule() {
       <div className="grid gap-4 lg:grid-cols-[minmax(220px,0.65fr)_1.35fr]">
         <Card className="space-y-3 p-4">
           <h2 className="font-semibold">Comandas abertas</h2>
+          <p className="text-xs text-muted-foreground">Clique para visualizar; dê dois cliques ou use Editar para alterar.</p>
           {!openCommands.length && <p className="py-5 text-center text-sm text-muted-foreground">Nenhuma comanda aberta.</p>}
           {openCommands.map((command) => (
             <button
               type="button"
               key={command.id}
               onClick={() => setSelectedId(command.id)}
+              onDoubleClick={() => openEditor(command)}
               className={`w-full rounded-md border p-3 text-left transition-colors ${selectedCommand?.id === command.id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'}`}
             >
               <span className="flex items-center justify-between gap-2 font-medium">
-                Comanda {command.number}
+                <span>Comanda {command.number}{command.name ? ` · ${command.name}` : ''}</span>
                 <Badge variant="secondary">{formatCurrency(command.total)}</Badge>
               </span>
-              <span className="mt-1 block text-xs text-muted-foreground">{command.items.length} item(ns)</span>
+              <span className="mt-1 block text-xs text-muted-foreground">{command.customerName ? `${command.customerName} · ` : ''}{command.items.length} item(ns)</span>
             </button>
           ))}
           {commands.some((command) => command.status === 'paid') && (
             <div className="border-t pt-3">
               <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Finalizadas</p>
               {commands.filter((command) => command.status === 'paid').sort((a, b) => b.number - a.number).map((command) => (
-                <div key={command.id} className="flex items-center justify-between py-1 text-sm text-muted-foreground">
-                  <span>Comanda {command.number}</span><span>{formatCurrency(command.total)}</span>
-                </div>
+                <button key={command.id} type="button" onClick={() => setSelectedId(command.id)} className="flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-muted/50">
+                  <span>Comanda {command.number}{command.name ? ` · ${command.name}` : ''}</span><span>{formatCurrency(command.total)}</span>
+                </button>
               ))}
             </div>
           )}
@@ -204,43 +254,26 @@ export function CommandsModule() {
         <div className="space-y-4">
           <Card className="p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div><h2 className="font-semibold">{selectedCommand ? `Consumo · Comanda ${selectedCommand.number}` : 'Selecione uma comanda'}</h2><p className="text-sm text-muted-foreground">Toque em um item para adicioná-lo ao consumo.</p></div>
-              {selectedCommand && <Button type="button" size="sm" variant="outline" onClick={() => removeCommand(selectedCommand)}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}
+              <div><h2 className="font-semibold">{selectedCommand ? `Comanda ${selectedCommand.number}${selectedCommand.name ? ` · ${selectedCommand.name}` : ''}` : 'Selecione uma comanda'}</h2><p className="text-sm text-muted-foreground">Visualize os itens e os dados do cliente.</p></div>
+              {selectedCommand?.status === 'open' && <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => openEditor(selectedCommand)}><Pencil className="mr-1 h-4 w-4" />Editar</Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => removeCommand(selectedCommand)}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>
+              </div>}
             </div>
-            {!!menuItems.length && <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-              {menuItems.map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  disabled={!selectedCommand}
-                  onClick={() => addItem({ productId: `menu:${item.id}`, name: item.name, price: item.price, quantity: 1 })}
-                  className="flex min-h-16 items-center justify-between gap-2 rounded-md border p-3 text-left hover:border-primary/50 hover:bg-primary/5 disabled:opacity-50"
-                >
-                  <span className="text-sm font-medium">{item.name}</span><span className="shrink-0 text-sm font-semibold text-primary">{formatCurrency(item.price)}</span>
-                </button>
-              ))}
-            </div>}
-            <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_140px_auto]">
-              <Input value={itemName} onChange={(event) => setItemName(event.target.value)} placeholder="Outro item ou consumo" disabled={!selectedCommand} />
-              <CurrencyInput value={Number(itemPrice) || 0} onValueChange={(value) => setItemPrice(value === null ? '' : String(value))} placeholder="Valor (R$)" disabled={!selectedCommand} />
-              <Button type="button" variant="outline" onClick={addManualItem} disabled={!selectedCommand}><Plus className="mr-1 h-4 w-4" />Adicionar</Button>
-            </div>
-          </Card>
-
-          <Card className="p-4">
+            {selectedCommand?.customerName && <p className="text-sm">Cliente: {selectedCommand.customerName}</p>}
+            {selectedCommand?.customerPhone && <p className="text-sm">Telefone: {selectedCommand.customerPhone}</p>}
+            {selectedCommand?.notes && <p className="whitespace-pre-wrap text-sm">Observações: {selectedCommand.notes}</p>}
             <h2 className="mb-3 flex items-center gap-2 font-semibold"><Receipt className="h-4 w-4" />Itens consumidos</h2>
-            {!selectedCommand?.items.length && <p className="py-5 text-center text-sm text-muted-foreground">Nenhum consumo registrado nesta comanda.</p>}
+            {selectedCommand && !selectedCommand.items.length && <p className="py-5 text-center text-sm text-muted-foreground">Nenhum consumo registrado nesta comanda.</p>}
             {selectedCommand?.items.map((item) => (
               <div key={item.productId} className="flex items-center gap-2 border-b py-2 last:border-0">
                 <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.name}</p><p className="text-xs text-muted-foreground">{formatCurrency(item.price)} cada</p></div>
-                <Button type="button" size="icon" variant="outline" className="h-7 w-7" onClick={() => updateQuantity(item, -1)} aria-label={`Diminuir ${item.name}`}><Minus className="h-3 w-3" /></Button>
-                <span className="w-6 text-center text-sm">{item.quantity}</span>
-                <Button type="button" size="icon" variant="outline" className="h-7 w-7" onClick={() => updateQuantity(item, 1)} aria-label={`Aumentar ${item.name}`}><Plus className="h-3 w-3" /></Button>
+                <span className="w-6 text-center text-sm">{item.quantity}×</span>
                 <span className="w-20 text-right text-sm font-semibold">{formatCurrency(item.price * item.quantity)}</span>
               </div>
             ))}
-            <div className="mt-3 flex items-center justify-between border-t pt-3 text-lg font-bold"><span>Total da comanda</span><span className="text-primary">{formatCurrency(total)}</span></div>
-            <p className="mt-2 text-xs text-muted-foreground">Para receber o pagamento, abra o PDV e selecione esta comanda na origem da venda.</p>
+            {selectedCommand && <><div className="mt-3 flex items-center justify-between border-t pt-3 text-lg font-bold"><span>Total da comanda</span><span className="text-primary">{formatCurrency(total)}</span></div>
+            <p className="mt-2 text-xs text-muted-foreground">{selectedCommand.status === 'open' ? 'Para receber o pagamento, abra o PDV e selecione esta comanda na origem da venda.' : 'Comanda finalizada; o estorno deve ser feito pelo relatório de caixa.'}</p></>}
           </Card>
         </div>
       </div>
@@ -318,6 +351,46 @@ export function CommandsModule() {
           </Card>
         </TabsContent>
       </Tabs>
+      <Dialog open={draft !== null} onOpenChange={(open) => { if (!open && !savingRef.current) setDraft(null); }}>
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Editar comanda {draft?.number}</DialogTitle>
+            <DialogDescription>Os dados do cliente são opcionais. Salve para aplicar os itens e as alterações.</DialogDescription>
+          </DialogHeader>
+          {draft && <fieldset disabled={saving} className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1 text-sm font-medium">Nome da comanda<Input value={draft.name ?? ''} maxLength={100} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+              <label className="space-y-1 text-sm font-medium">Nome do cliente<Input value={draft.customerName ?? ''} maxLength={100} onChange={(event) => setDraft({ ...draft, customerName: event.target.value })} /></label>
+              <label className="space-y-1 text-sm font-medium">Telefone do cliente<Input type="tel" value={draft.customerPhone ?? ''} maxLength={30} onChange={(event) => setDraft({ ...draft, customerPhone: event.target.value })} /></label>
+              <label className="space-y-1 text-sm font-medium">Observações<Input value={draft.notes ?? ''} maxLength={200} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} /></label>
+            </div>
+            {!!menuItems.length && <div className="grid gap-2 sm:grid-cols-2">
+              {menuItems.map((item) => <button type="button" key={item.id} onClick={() => addItem({ productId: `menu:${item.id}`, name: item.name, price: item.price, quantity: 1 })} className="flex items-center justify-between gap-2 rounded-md border p-3 text-left hover:bg-muted/50"><span>{item.name}</span><span>{formatCurrency(item.price)}</span></button>)}
+            </div>}
+            <div className="grid gap-2 sm:grid-cols-[1fr_140px_auto]">
+              <Input value={itemName} onChange={(event) => setItemName(event.target.value)} placeholder="Outro item ou consumo" />
+              <CurrencyInput value={Number(itemPrice) || 0} onValueChange={(value) => setItemPrice(value === null ? '' : String(value))} placeholder="Valor (R$)" />
+              <Button type="button" variant="outline" onClick={addManualItem}><Plus className="mr-1 h-4 w-4" />Adicionar</Button>
+            </div>
+            <div className="space-y-2">
+              <h3 className="font-semibold">Itens consumidos</h3>
+              {!draft.items.length && <p className="text-sm text-muted-foreground">Nenhum consumo registrado nesta comanda.</p>}
+              {draft.items.map((item) => <div key={item.productId} className="flex items-center gap-2 border-b py-2">
+                <span className="min-w-0 flex-1 truncate text-sm">{item.name}</span>
+                <Button type="button" size="icon" variant="outline" className="h-7 w-7" onClick={() => updateQuantity(item, -1)} aria-label={`Diminuir ${item.name}`}><Minus className="h-3 w-3" /></Button>
+                <span className="w-6 text-center text-sm">{item.quantity}</span>
+                <Button type="button" size="icon" variant="outline" className="h-7 w-7" onClick={() => updateQuantity(item, 1)} aria-label={`Aumentar ${item.name}`}><Plus className="h-3 w-3" /></Button>
+                <span className="w-20 text-right text-sm font-semibold">{formatCurrency(item.price * item.quantity)}</span>
+              </div>)}
+              <p className="text-right font-bold">Total: {formatCurrency(draft.total)}</p>
+            </div>
+          </fieldset>}
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={saving} onClick={() => setDraft(null)}>Cancelar</Button>
+            <Button type="button" disabled={saving} onClick={() => void saveDraft()}>{saving ? 'Salvando...' : 'Salvar comanda'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

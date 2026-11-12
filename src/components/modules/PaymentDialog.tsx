@@ -117,7 +117,7 @@ export function PaymentDialog({
     <Dialog open={open} onOpenChange={(next) => { if (!savingRef.current) onOpenChange(next); }}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>{mode === 'receive' ? 'Receber pagamento' : 'Informar pagamento'}</DialogTitle>
+          <DialogTitle>{mode === 'receive' ? 'Receber pagamento' : 'Etapa 3 de 3 · Pagamento'}</DialogTitle>
           <DialogDescription>
             {mode === 'receive'
               ? 'Divida o valor entre uma ou mais formas de pagamento.'
@@ -189,9 +189,9 @@ export function PaymentDialog({
           )}
         </div>
         <DialogFooter>
-          <Button type="button" variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button type="button" variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>{mode === 'receive' ? 'Cancelar' : 'Voltar'}</Button>
           <Button type="button" onClick={confirm} disabled={saving || !exactTotal || hasInvalidSplit || (mode === 'receive' && cashTenderShort) || splits.some((split) => split.amount <= 0)}>
-            {saving ? 'Salvando...' : mode === 'receive' ? 'Confirmar pagamento' : 'Continuar'}
+            {saving ? 'Salvando...' : mode === 'receive' ? 'Confirmar pagamento' : 'Criar pedido'}
           </Button>
         </DialogFooter>
       </DialogContent>

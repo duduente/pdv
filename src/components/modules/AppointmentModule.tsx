@@ -20,7 +20,6 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 
 export function AppointmentModule() {
   const { selectedEstablishment, viewPublicPage } = useApp();
-  const [tab, setTab] = useState('config');
 
   if (!selectedEstablishment) return null;
 
@@ -32,7 +31,7 @@ export function AppointmentModule() {
             <CalendarClock className="h-6 w-6 text-primary" />
             Módulo de Agendamentos
           </h1>
-          <p className="text-muted-foreground">Configure serviços, horários e acompanhe agendamentos</p>
+          <p className="text-muted-foreground">Acompanhe e gerencie os agendamentos. Serviços e horários ficam em Configurações da loja.</p>
         </div>
         <div className="flex items-center gap-2">
           <CopyLinkButton slug={selectedEstablishment.slug} type="agendar" />
@@ -43,28 +42,23 @@ export function AppointmentModule() {
         </div>
       </div>
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="config">Configurações</TabsTrigger>
-          <TabsTrigger value="services">Serviços</TabsTrigger>
-          <TabsTrigger value="pros">Profissionais</TabsTrigger>
-          <TabsTrigger value="calendar">Agendamentos</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="config" className="mt-4">
-          <ConfigTab />
-        </TabsContent>
-        <TabsContent value="services" className="mt-4">
-          <ServicesTab />
-        </TabsContent>
-        <TabsContent value="pros" className="mt-4">
-          <ProsTab />
-        </TabsContent>
-        <TabsContent value="calendar" className="mt-4">
-          <CalendarTab />
-        </TabsContent>
-      </Tabs>
+      <CalendarTab />
     </div>
+  );
+}
+
+export function AppointmentSettings() {
+  return (
+    <Tabs defaultValue="hours" className="space-y-4">
+      <TabsList className="flex h-auto flex-wrap justify-start" aria-label="Configurações de agendamento">
+        <TabsTrigger value="hours">Horários</TabsTrigger>
+        <TabsTrigger value="services">Serviços</TabsTrigger>
+        <TabsTrigger value="pros">Profissionais</TabsTrigger>
+      </TabsList>
+      <TabsContent value="hours"><ConfigTab /></TabsContent>
+      <TabsContent value="services"><ServicesTab /></TabsContent>
+      <TabsContent value="pros"><ProsTab /></TabsContent>
+    </Tabs>
   );
 }
 

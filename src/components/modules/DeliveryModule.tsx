@@ -113,6 +113,7 @@ export function DeliveryModule() {
   );
   const [newOrderOpen, setNewOrderOpen] = useState(false);
   const [newOrderPaymentOpen, setNewOrderPaymentOpen] = useState(false);
+  const [newOrderStep, setNewOrderStep] = useState<'customer' | 'products'>('customer');
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [cancellationOrder, setCancellationOrder] = useState<MenuOrder | null>(null);
   const [cancellationReason, setCancellationReason] = useState('');
@@ -352,19 +353,24 @@ export function DeliveryModule() {
     }
   };
 
-  const createOrder = () => {
+  const validateCustomer = () => {
     if (!customerName.trim() || !phone.trim() || !document.trim() || (orderType === 'delivery' && !address.trim())) {
       toast.error(orderType === 'delivery'
         ? 'Preencha nome, endereço, telefone e CPF/CNPJ do cliente'
         : 'Preencha nome, telefone e CPF/CNPJ do cliente');
-      return;
-    }
-    if (!cart.length) {
-      toast.error('Adicione ao menos um item ao pedido');
-      return;
+      return false;
     }
     if (orderType === 'delivery' && (!Number.isFinite(fee) || fee < 0)) {
       toast.error('Informe um valor válido para a taxa de entrega');
+      return false;
+    }
+    return true;
+  };
+
+  const createOrder = () => {
+    if (!validateCustomer()) return;
+    if (!cart.length) {
+      toast.error('Adicione ao menos um item ao pedido');
       return;
     }
     if (editingOrder) {
@@ -445,7 +451,10 @@ export function DeliveryModule() {
   };
 
   const openNewOrder = () => {
+    postalCodeLookupId.current += 1;
+    setLookingUpPostalCode(false);
     setEditingOrderId(null);
+    setNewOrderStep('customer');
     setOrderType('delivery');
     setCustomerName('');
     setAddress('');
@@ -454,11 +463,17 @@ export function DeliveryModule() {
     setDocument('');
     setDeliveryFee(settings.deliveryFee);
     setCart([]);
+    setCustomName('');
+    setCustomPrice(0);
     setNewOrderOpen(true);
   };
 
   const openEditOrder = (order: MenuOrder) => {
     if (order.deliveryStatus === 'cancelled') return;
+    postalCodeLookupId.current += 1;
+    setLookingUpPostalCode(false);
+    setCustomName('');
+    setCustomPrice(0);
     setEditingOrderId(order.id);
     setOrderType(order.orderType ?? 'delivery');
     setCustomerName(order.customerName ?? '');
@@ -867,14 +882,19 @@ export function DeliveryModule() {
 
       <Dialog open={newOrderOpen} onOpenChange={(open) => {
         setNewOrderOpen(open);
-        if (!open) setEditingOrderId(null);
+        if (!open) {
+          postalCodeLookupId.current += 1;
+          setLookingUpPostalCode(false);
+          setEditingOrderId(null);
+        }
       }}>
         <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto" style={accentBorderStyle}>
           <DialogHeader>
             <DialogTitle>{editingOrder ? 'Editar pedido' : 'Novo pedido'}</DialogTitle>
-            <DialogDescription>{editingOrder ? 'Corrija os dados do pedido.' : 'Preencha os dados e os itens. O pedido entrará em produção ao salvar.'}</DialogDescription>
+            <DialogDescription>{editingOrder ? 'Corrija os dados do pedido.' : newOrderStep === 'customer' ? 'Etapa 1 de 3 · Dados do cliente' : 'Etapa 2 de 3 · Produtos do pedido'}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            {(editingOrder || newOrderStep === 'customer') && <>
             <div className="grid gap-3 rounded-lg border bg-muted/10 p-4 sm:grid-cols-2" style={accentBorderStyle}>
               <fieldset disabled={!canEditOrderContents} className="contents">
                 <legend className="sr-only">Modalidade do pedido</legend>
@@ -893,9 +913,11 @@ export function DeliveryModule() {
               <label className="space-y-1 text-sm font-medium">CPF ou CNPJ<Input style={accentBorderStyle} inputMode="numeric" maxLength={14} value={document} onChange={(event) => setDocument(digitsOnly(event.target.value).slice(0, 14))} /></label>
               {orderType === 'delivery' && <label className="space-y-1 text-sm font-medium">Valor da entrega (R$)<CurrencyInput style={accentBorderStyle} value={deliveryFee} onValueChange={(value) => setDeliveryFee(value ?? 0)} disabled={!canEditOrderContents} /></label>}
               {lookingUpPostalCode && <p className="text-xs text-muted-foreground sm:col-span-2">Buscando endereço pelo CEP...</p>}
-              <p className="text-sm text-muted-foreground sm:col-span-2">{editingOrder ? 'Se você alterar itens ou valores, a forma de pagamento será informada novamente ao finalizar no caixa.' : 'Ao salvar, informe uma ou mais formas de pagamento e os respectivos valores.'}</p>
+              {editingOrder && <p className="text-sm text-muted-foreground sm:col-span-2">Se você alterar itens ou valores, a forma de pagamento será informada novamente ao finalizar no caixa.</p>}
             </div>
             {editingOrder && !canEditOrderContents && <p className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">Este pedido já foi pago. Os dados financeiros, os itens e a modalidade não podem ser alterados para preservar o registro do caixa.</p>}
+            </>}
+            {(editingOrder || newOrderStep === 'products') && <>
             {canEditOrderContents && !!menuItems.length && <div>
               <h3 className="mb-2 text-sm font-semibold">Adicionar do cardápio</h3>
               <div className="grid max-h-36 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2">
@@ -927,9 +949,20 @@ export function DeliveryModule() {
                 <div className="mt-1 flex justify-between font-bold"><span>Total</span><span>{formatCurrency(subtotal + (orderType === 'delivery' && Number.isFinite(fee) ? fee : 0))}</span></div>
               </div>
             </div>}
+            </>}
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setNewOrderOpen(false)}>Cancelar</Button>
-              <Button type="button" onClick={createOrder}>{editingOrder ? 'Salvar alterações' : 'Salvar pedido'}</Button>
+              <Button type="button" variant="outline" onClick={() => {
+                postalCodeLookupId.current += 1;
+                setLookingUpPostalCode(false);
+                setNewOrderOpen(false);
+                setEditingOrderId(null);
+              }}>Cancelar</Button>
+              {editingOrder ? <Button type="button" onClick={createOrder}>Salvar alterações</Button> : newOrderStep === 'customer' ? (
+                <Button type="button" onClick={() => { if (validateCustomer()) setNewOrderStep('products'); }}>Próximo: produtos</Button>
+              ) : <>
+                <Button type="button" variant="outline" onClick={() => setNewOrderStep('customer')}>Voltar</Button>
+                <Button type="button" onClick={createOrder}>Próximo: pagamento</Button>
+              </>}
             </div>
           </div>
         </DialogContent>

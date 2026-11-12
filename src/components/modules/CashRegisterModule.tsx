@@ -888,7 +888,7 @@ function SalesTab({
                   {openCommands.map((command) => (
                     <div key={command.id} className={`flex flex-wrap items-center justify-between gap-3 rounded-md border p-3 ${selectedCommand?.id === command.id ? 'border-primary bg-primary/5' : ''}`}>
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium">Comanda {command.number}</p>
+                        <p className="text-sm font-medium">Comanda {command.number}{command.name ? ` · ${command.name}` : ''}{command.customerName ? ` · ${command.customerName}` : ''}</p>
                         <p className="truncate text-xs text-muted-foreground">{command.items.map((item) => `${item.quantity}× ${item.name}`).join(', ') || 'Sem consumo'}</p>
                       </div>
                       <span className="font-semibold">{money(command.total)}</span>
@@ -1215,6 +1215,15 @@ function ReportsTab({ establishmentName, sales, movements, expenses, auditEvents
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Relatório de caixa</h2><p className="text-sm text-muted-foreground">{PERIOD_LABELS[period]} · {periodDescription(period, referenceDate)}</p></div><div className="flex flex-wrap items-center gap-3"><PeriodSelector value={period} onChange={setPeriod} referenceDate={referenceDate} onReferenceDateChange={setReferenceDate} /><Button type="button" variant="outline" onClick={() => void exportReport('backup')} disabled={exporting !== null}><Download className="mr-2 h-4 w-4" />{exporting === 'backup' ? 'Exportando...' : 'Backup JSON'}</Button><Button type="button" variant="outline" onClick={() => void exportReport('excel')} disabled={exporting !== null}><Download className="mr-2 h-4 w-4" />{exporting === 'excel' ? 'Exportando...' : 'Exportar Excel'}</Button></div></div>
+      <Tabs defaultValue="summary" className="space-y-4">
+        <TabsList className="flex h-auto flex-wrap justify-start" aria-label="Detalhes do relatório de caixa">
+          <TabsTrigger value="summary">Resumo e gráfico</TabsTrigger>
+          <TabsTrigger value="sales">Vendas</TabsTrigger>
+          <TabsTrigger value="expenses">Despesas</TabsTrigger>
+          <TabsTrigger value="breakdown">Pagamentos e origens</TabsTrigger>
+          <TabsTrigger value="delivery">Entregas</TabsTrigger>
+        </TabsList>
+        <TabsContent value="summary" className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-3"><Metric icon={DollarSign} label="Faturamento" value={money(summary.total)} /><Metric icon={Receipt} label="Número de vendas" value={String(summary.count)} /><Metric icon={Wallet} label="Movimentações" value={String(periodMovements.length)} /></div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric icon={TrendingUp} label="Lucro estimado" value={money(profit.estimatedProfit)} />
@@ -1274,6 +1283,8 @@ function ReportsTab({ establishmentName, sales, movements, expenses, auditEvents
           </div>
         ) : <p className="py-8 text-center text-sm text-muted-foreground">Ainda não há vendas ou despesas neste período.</p>}
       </Card>
+        </TabsContent>
+        <TabsContent value="expenses">
       <Card className="p-5">
         <h3 className="mb-3 font-semibold">Despesas do período</h3>
         {periodExpenses.length ? <div className="divide-y">{periodExpenses.map((expense) => (
@@ -1283,8 +1294,12 @@ function ReportsTab({ establishmentName, sales, movements, expenses, auditEvents
           </div>
         ))}</div> : <p className="py-4 text-center text-sm text-muted-foreground">Nenhuma despesa neste período.</p>}
       </Card>
+        </TabsContent>
+        <TabsContent value="breakdown" className="space-y-4">
       <Card className="p-5"><h3 className="mb-4 font-semibold">Por forma de pagamento</h3><PaymentBreakdown sales={periodSales} /></Card>
       <Card className="space-y-4 p-5"><h3 className="font-semibold">Por origem</h3><SourceBreakdown sales={periodSales} /></Card>
+        </TabsContent>
+        <TabsContent value="delivery">
       <Card className="p-5">
         <h3 className="mb-3 font-semibold">Delivery por entregador</h3>
         {deliveryRows.length ? <div className="divide-y">
@@ -1296,6 +1311,8 @@ function ReportsTab({ establishmentName, sales, movements, expenses, auditEvents
           ))}
         </div> : <p className="py-4 text-center text-sm text-muted-foreground">Nenhuma entrega paga neste período.</p>}
       </Card>
+        </TabsContent>
+        <TabsContent value="sales">
       <Card className="p-5">
         <h3 className="mb-3 font-semibold">Vendas do período</h3>
         {periodSales.length ? <div className="divide-y">{periodSales.map((sale) => (
@@ -1318,6 +1335,8 @@ function ReportsTab({ establishmentName, sales, movements, expenses, auditEvents
           </div>
         ))}</div> : <p className="py-6 text-center text-sm text-muted-foreground">Nenhuma venda neste período.</p>}
       </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

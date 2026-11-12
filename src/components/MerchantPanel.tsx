@@ -22,7 +22,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { AppointmentModule, ProfessionalRevenueTab } from './modules/AppointmentModule';
+import { AppointmentModule, AppointmentSettings, ProfessionalRevenueTab } from './modules/AppointmentModule';
 import { MenuModule } from './modules/MenuModule';
 import { CashRegisterModule } from './modules/CashRegisterModule';
 import { InventoryModule } from './modules/InventoryModule';
@@ -95,7 +95,8 @@ export function MerchantPanel() {
       .filter((module) => establishment.modules[module] && canAccessModule(module));
     const settingsAllowed = hasStorePermission(user, establishment.id, 'store-settings')
       || hasStorePermission(user, establishment.id, 'manage-users')
-      || (establishment.modules.delivery && hasStorePermission(user, establishment.id, 'delivery'));
+      || (establishment.modules.delivery && hasStorePermission(user, establishment.id, 'delivery'))
+      || (establishment.modules.agendamento && hasStorePermission(user, establishment.id, 'agendamento'));
     const allowedViews: MerchantView[] = [
       ...(hasStorePermission(user, establishment.id, 'dashboard') ? ['dashboard' as const] : []),
       ...(settingsAllowed ? ['settings' as const] : []),
@@ -116,7 +117,8 @@ export function MerchantPanel() {
   const canViewDashboard = hasStorePermission(user, est.id, 'dashboard');
   const canViewSettings = hasStorePermission(user, est.id, 'store-settings')
     || hasStorePermission(user, est.id, 'manage-users')
-    || (est.modules.delivery && hasStorePermission(user, est.id, 'delivery'));
+    || (est.modules.delivery && hasStorePermission(user, est.id, 'delivery'))
+    || (est.modules.agendamento && hasStorePermission(user, est.id, 'agendamento'));
   const canViewFinance = est.modules.finance && hasStorePermission(user, est.id, 'finance');
   const canViewCashReports = hasStorePermission(user, est.id, 'pdv-reports');
   const canViewCash = canAccessModule('pdv');
@@ -221,11 +223,20 @@ export function MerchantPanel() {
         <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8 animate-fade-in">
           {view === 'dashboard' && canViewDashboard && <DashboardView />}
           {view === 'reports' && canViewReports && <div className="space-y-6">
-            <div><h1 className="text-2xl font-bold">Relatórios</h1><p className="text-muted-foreground">Gráficos e resultados do estabelecimento.</p></div>
-            {canViewCashReports && (est.modules.pdv || (est.modules.agendamento && canAccessModule('agendamento')))
-              && <ReportsCharts est={est} canViewCashReports={canViewCashReports} canViewAppointments={canAccessModule('agendamento')} />}
-            {est.modules.pdv && canViewCashReports && <CashRegisterModule key={`reports-${est.id}`} mode="reports" />}
-            {est.modules.agendamento && canAccessModule('agendamento') && <Card className="p-5"><ProfessionalRevenueTab /></Card>}
+            <div><h1 className="text-2xl font-bold">Relatórios</h1><p className="text-muted-foreground">Consulte os resultados por assunto.</p></div>
+            <Tabs key={est.id} defaultValue={est.modules.pdv && canViewCashReports ? 'cash' : 'professionals'} className="space-y-4">
+              <TabsList className="flex h-auto flex-wrap justify-start" aria-label="Categorias de relatórios">
+                {est.modules.pdv && canViewCashReports && <TabsTrigger value="cash">Vendas e despesas</TabsTrigger>}
+                {est.modules.pdv && canViewCashReports && <TabsTrigger value="movements">Movimentações do caixa</TabsTrigger>}
+                {est.modules.agendamento && canAccessModule('agendamento') && <TabsTrigger value="professionals">Profissionais</TabsTrigger>}
+              </TabsList>
+              {est.modules.pdv && canViewCashReports && <TabsContent value="cash"><CashRegisterModule key={`reports-${est.id}`} mode="reports" /></TabsContent>}
+              {est.modules.pdv && canViewCashReports && <TabsContent value="movements"><ReportsCharts est={est} kind="activity" /></TabsContent>}
+              {est.modules.agendamento && canAccessModule('agendamento') && <TabsContent value="professionals" className="space-y-4">
+                {canViewCashReports && <ReportsCharts est={est} kind="professional" />}
+                <Card className="p-5"><ProfessionalRevenueTab /></Card>
+              </TabsContent>}
+            </Tabs>
           </div>}
           {view === 'settings' && canViewSettings && <SettingsView />}
           {view === 'finance' && canViewFinance && <FinanceModule key={est.id} />}
@@ -346,6 +357,7 @@ export function MerchantPanel() {
     const canEditIdentity = hasStorePermission(user, est.id, 'store-settings');
     const canConfigureDelivery = est.modules.delivery && hasStorePermission(user, est.id, 'delivery');
     const canManageTeam = hasStorePermission(user, est.id, 'manage-users');
+    const canConfigureAppointments = est.modules.agendamento && hasStorePermission(user, est.id, 'agendamento');
     const [name, setName] = useState(est.theme.name);
     const [accent, setAccent] = useState(est.theme.accentColor);
     const [logo, setLogo] = useState(est.theme.logo);
@@ -405,12 +417,13 @@ export function MerchantPanel() {
       <div className="max-w-2xl space-y-6">
         <div>
           <h1 className="text-2xl font-bold">Configurações da loja</h1>
-          <p className="text-muted-foreground">Identidade, delivery e acessos da equipe.</p>
+          <p className="text-muted-foreground">Identidade, agendamentos, delivery e acessos da equipe.</p>
         </div>
 
-        <Tabs defaultValue={canEditIdentity ? 'store' : canConfigureDelivery ? 'delivery' : 'team'} className="space-y-4">
+        <Tabs defaultValue={canEditIdentity ? 'store' : canConfigureAppointments ? 'appointments' : canConfigureDelivery ? 'delivery' : 'team'} className="space-y-4">
           <TabsList className="h-auto w-full flex-wrap justify-start">
             {canEditIdentity && <TabsTrigger value="store">Loja</TabsTrigger>}
+            {canConfigureAppointments && <TabsTrigger value="appointments">Agendamentos</TabsTrigger>}
             {canConfigureDelivery && <TabsTrigger value="delivery">Delivery</TabsTrigger>}
             {canManageTeam && <TabsTrigger value="team">Equipe</TabsTrigger>}
           </TabsList>
@@ -472,6 +485,9 @@ export function MerchantPanel() {
               <Button onClick={saveIdentity}>Salvar alterações</Button>
             </Card>
           </TabsContent>}
+          {canConfigureAppointments && <TabsContent value="appointments" className="mt-0">
+            <AppointmentSettings />
+          </TabsContent>}
           {canConfigureDelivery && <TabsContent value="delivery" className="mt-0">
             <DeliveryStoreSettings establishmentId={est.id} />
           </TabsContent>}
@@ -484,7 +500,7 @@ export function MerchantPanel() {
   }
 }
 
-function ReportsCharts({ est, canViewCashReports, canViewAppointments }: { est: Establishment; canViewCashReports: boolean; canViewAppointments: boolean }) {
+function ReportsCharts({ est, kind }: { est: Establishment; kind: 'activity' | 'professional' }) {
   const establishmentId = est.id;
   const [cashRegister, , cashLoaded] = usePersistentState<CashRegisterData>(
     `cash-register:${establishmentId}`,
@@ -570,18 +586,18 @@ function ReportsCharts({ est, canViewCashReports, canViewAppointments }: { est: 
     .map(([name, summary]) => ({ professional: name, ...summary }))
     .sort((first, second) => second.revenue - first.revenue);
 
-    if (!cashLoaded || (est.modules.agendamento && canViewAppointments && !appointmentsLoaded)) return <p>Carregando gráficos...</p>;
+    if (!cashLoaded || (kind === 'professional' && !appointmentsLoaded)) return <p>Carregando gráficos...</p>;
     return <div className="space-y-4">
-        {!est.modules.pdv && <div className="flex flex-wrap items-end gap-3">
+        {kind === 'professional' && <div className="flex flex-wrap items-end gap-3">
           <label className="space-y-1 text-xs font-medium text-muted-foreground">Data de referência<Input type="date" value={dashboardReferenceDate} onChange={(event) => { if (event.target.value) setDashboardReferenceDate(event.target.value); }} /></label>
           <div className="inline-flex flex-wrap rounded-md border p-1" role="group" aria-label="Período dos gráficos">
             {(['day', 'week', 'month', 'year'] as const).map((period) => <Button key={period} type="button" size="sm" variant={dashboardPeriod === period ? 'default' : 'ghost'} onClick={() => setDashboardPeriod(period)}>{DASHBOARD_PERIOD_LABELS[period]}</Button>)}
           </div>
         </div>}
-        {est.modules.pdv && canViewCashReports && (
+        {kind === 'activity' && (
           <Card className="p-6">
             <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-              <div><h2 className="font-semibold">Atividade do caixa</h2><p className="text-sm text-muted-foreground">{DASHBOARD_PERIOD_LABELS[dashboardPeriod]} · {chartRangeStart.toLocaleDateString('pt-BR')} a {new Date(chartRangeEnd.getTime() - 1).toLocaleDateString('pt-BR')}</p></div>
+              <div><h2 className="font-semibold">Atividade do caixa</h2><p className="text-sm text-muted-foreground">Vendas, sangrias e suprimentos · {DASHBOARD_PERIOD_LABELS[dashboardPeriod]} · {chartRangeStart.toLocaleDateString('pt-BR')} a {new Date(chartRangeEnd.getTime() - 1).toLocaleDateString('pt-BR')}</p></div>
               <div className="flex flex-wrap items-end gap-3">
                 <ChartTypeSelector value={activityChartType} onChange={setActivityChartType} label="atividade do caixa" />
                 <label className="space-y-1 text-xs font-medium text-muted-foreground">Data de referência<Input type="date" value={dashboardReferenceDate} onChange={(event) => { if (event.target.value) setDashboardReferenceDate(event.target.value); }} /></label>
@@ -628,7 +644,7 @@ function ReportsCharts({ est, canViewCashReports, canViewAppointments }: { est: 
           </Card>
         )}
 
-        {est.modules.agendamento && canViewCashReports && canViewAppointments && (
+        {kind === 'professional' && (
           <Card className="p-6">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Faturamento por profissional</h2><p className="text-sm text-muted-foreground">Serviços registrados no caixa · {DASHBOARD_PERIOD_LABELS[dashboardPeriod].toLowerCase()} ({chartRangeStart.toLocaleDateString('pt-BR')} a {new Date(chartRangeEnd.getTime() - 1).toLocaleDateString('pt-BR')})</p></div><ChartTypeSelector value={professionalChartType} onChange={setProfessionalChartType} label="faturamento por profissional" /></div>
             {professionalChartData.length ? (

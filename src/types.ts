@@ -191,6 +191,10 @@ export interface Command {
   id: string;
   establishmentId: string;
   number: number;
+  name?: string;
+  customerName?: string;
+  customerPhone?: string;
+  notes?: string;
   createdAt: string;
   items: SaleItem[];
   total: number;
