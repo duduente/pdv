@@ -4,6 +4,7 @@ import { FunctionsHttpError, type Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import type { AppPermission, StorePermission } from '@/types';
 import { hasStorePermission } from './permissions';
+import { reconcileLocalEmployees } from '@/lib/localEmployeeIntegration';
 
 export type DemoRole = 'super-admin' | 'merchant';
 
@@ -264,6 +265,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isDemo: true,
     };
     window.localStorage.setItem(USERS_KEY, JSON.stringify([...readUsers(), newUser]));
+    try {
+      reconcileLocalEmployees(input.establishmentId, []);
+    } catch (error) {
+      throw new Error(`Subusuário criado, mas não foi possível vinculá-lo a Funcionários: ${error instanceof Error ? error.message : 'erro de armazenamento.'}`);
+    }
   }, [user]);
 
   const listStoreUsers = useCallback<AuthContextValue['listStoreUsers']>(async (establishmentId) => {

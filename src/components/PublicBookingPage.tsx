@@ -45,7 +45,7 @@ export function PublicBookingPage() {
   const establishmentId = selectedEstablishment?.id ?? 'default';
   const isBarbershop = selectedEstablishment?.slug === 'barbearia-estilo';
   const [services] = usePersistentState<Service[]>(`services:${establishmentId}`, isBarbershop ? initialServices : []);
-  const [professionals] = usePersistentState<Professional[]>(`professionals:${establishmentId}`, isBarbershop ? initialProfessionals : []);
+  const [professionals] = usePersistentState<Professional[]>(`professionals:${establishmentId}`, isBarbershop ? initialProfessionals : [], { readOnly: true });
   const [appointments, setAppointments, appointmentsLoaded, appointmentsSnapshot] = usePersistentState<Appointment[]>(`appointments:${establishmentId}`, isBarbershop ? initialAppointments : []);
   const [hours] = usePersistentState<WorkingHours[]>(
     `working-hours:${establishmentId}`,

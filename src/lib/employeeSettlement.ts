@@ -52,6 +52,7 @@ export interface EmployeeConsumption extends EmployeeConsumptionAmount {
 export interface EmployeeProfile {
   id: string;
   name: string;
+  role?: string;
   userId?: string;
   salaryCents: number;
   commissionPercent: number;

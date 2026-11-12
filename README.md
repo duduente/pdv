@@ -40,7 +40,9 @@ Os campos de valor monetário usam o padrão brasileiro com duas casas decimais 
 
 ## Funcionários (experimental)
 
-O Super Admin pode ativar **Funcionários** para cada loja junto com **Finanças**. Subusuários precisam da permissão de Finanças para gerenciar funcionários; o vínculo opcional com um subusuário exige também acesso à gestão de usuários. No Supabase, aplique as migrations pendentes, incluindo `supabase/migrations/20261112010000_employee_roster_access.sql`, antes de usar a integração.
+O Super Admin pode ativar **Funcionários** para cada loja junto com **Finanças**. Subusuários precisam da permissão de Finanças para gerenciar funcionários; o vínculo com um subusuário exige também acesso à gestão de usuários. Profissionais cadastrados nas configurações de agendamento e novos subusuários criam funcionários com salário, comissão e desconto inicialmente zerados. Todos os funcionários ativos aparecem na agenda; para retirá-los da agenda e das opções de venda, edite o cadastro em Funcionários e desative-os. A lista de agendamento não expõe salário, comissão ou desconto.
+
+A migration `supabase/migrations/20261112030000_employee_appointments_integration.sql` ativa Finanças e Funcionários nas lojas existentes e converte profissionais e subusuários já armazenados no Supabase. Contas com permissão total (`*`), usadas para os donos, não são convertidas automaticamente. Cadastros de mesmo nome são vinculados apenas quando a correspondência é única; nomes ambíguos ficam separados para revisão. Dados existentes de salário e comissões são preservados. Dados que existam apenas no armazenamento de outro navegador não podem ser migrados pelo servidor.
 
 As abas separam cadastro, consumos, comissões e fechamento. No caixa e no pagamento de delivery, a escolha de funcionário é opcional; a comissão usa o valor integral da venda e o percentual registrado no pagamento. Para preservar o histórico, vendas com funcionário podem ser canceladas, mas não excluídas definitivamente. Consumos de estoque reduzem o saldo e registram movimentação; itens do cardápio não baixam estoque automaticamente. Cancelar consumo exige ajuste manual do estoque.
 
@@ -48,7 +50,7 @@ Após o término do mês, o fechamento soma salário e comissões, desconta cons
 
 **Somente para testes:** não use com dados reais até validar a integração completa no ambiente Supabase. A migration `supabase/migrations/20261112020000_atomic_employee_records.sql` adiciona operações transacionais e detecção de conflito para funcionários, estoque, caixa, pedidos, comandas e agendamentos. A cobrança, o cancelamento e a exclusão de vendas vinculadas alteram o caixa e o registro de origem na mesma transação; o armazenamento local e o modo demonstração continuam sem garantias transacionais.
 
-Essa migration bloqueia gravações diretas da versão anterior do aplicativo nesses registros. Planeje uma janela de manutenção e backup, aplique as migrations pendentes no ambiente de testes e publique a versão correspondente do aplicativo antes de retomar o uso; todos os dispositivos devem recarregar a página. Não aplique a migration isoladamente em uma loja em funcionamento.
+Essas migrations bloqueiam gravações diretas da versão anterior do aplicativo nesses registros e na lista de profissionais. Planeje uma janela de manutenção e backup, aplique as migrations pendentes em ordem no ambiente de testes e publique a versão correspondente do aplicativo antes de retomar o uso; todos os dispositivos devem recarregar a página. Não aplique a migration isoladamente em uma loja em funcionamento.
 
 ## Perfis de subusuários
 

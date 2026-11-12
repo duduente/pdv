@@ -7,6 +7,7 @@ import { commitEmployeeRecords, type AtomicRecordOperation } from '@/lib/atomicE
 import { supabase } from '@/lib/supabase';
 import { calculateEmployeeMonthlySettlement, calculateEmployeeSettlement, employeeSalesFromCashRegister, type EmployeeMonthlySettlement, type EmployeeProfile, type EmployeeRecords, type EmployeeRosterEntry } from '@/lib/employeeSettlement';
 import { EMPTY_STORE_FINANCES, type StoreFinances } from '@/lib/storeFinances';
+import { writeLocalProfessionalProjection } from '@/lib/localEmployeeIntegration';
 import type { CashRegisterData, InventoryMovement, MenuItem, Product } from '@/types';
 import { formatCurrency, menuItems as initialMenuItems, products as initialProducts } from '@/mockData';
 import { Button } from '@/components/ui/button';
@@ -52,6 +53,7 @@ export function EmployeesModule() {
   const [salary, setSalary] = useState(0);
   const [commission, setCommission] = useState('0');
   const [discount, setDiscount] = useState('0');
+  const [active, setActive] = useState(true);
   const [source, setSource] = useState<'manual' | 'inventory' | 'menu'>('manual');
   const [itemId, setItemId] = useState('');
   const [description, setDescription] = useState('');
@@ -148,29 +150,32 @@ export function EmployeesModule() {
       toast.error('Este subusuário já está vinculado a outro funcionário.'); return;
     }
     const saved: EmployeeProfile = {
-      id: existing?.id ?? crypto.randomUUID(), name: name.trim(), userId: userId || undefined,
+      ...existing, id: existing?.id ?? crypto.randomUUID(), name: name.trim(), userId: userId || undefined,
       salaryCents, commissionPercent: commissionValue, consumptionDiscountPercent: discountValue,
-      active: existing?.active ?? true,
+      active,
     };
-    const updatedFinances: StoreFinances = { ...finances, employees: {
-      ...records,
-      employees: existing ? records.employees.map((entry) => entry.id === saved.id ? saved : entry) : [...records.employees, saved],
-    } };
+    const updatedEmployees = existing
+      ? records.employees.map((entry) => entry.id === saved.id ? saved : entry)
+      : [...records.employees, saved];
+    const updatedFinances: StoreFinances = { ...finances, employees: { ...records, employees: updatedEmployees } };
     const updatedRoster = [...roster.filter((entry) => entry.id !== saved.id), {
       id: saved.id, name: saved.name, commissionPercent: saved.commissionPercent, active: saved.active,
     }];
     const savedSuccessfully = await commit([
       { snapshot: { ...financesSnapshot, value: finances }, value: updatedFinances, write: true },
       { snapshot: { ...rosterSnapshot, value: roster }, value: updatedRoster, write: true },
-    ], () => { setFinances(updatedFinances); setRoster(updatedRoster); });
+    ], () => {
+      writeLocalProfessionalProjection(establishmentId, updatedEmployees);
+      setFinances(updatedFinances); setRoster(updatedRoster);
+    });
     if (!savedSuccessfully) return;
     setSelectedId(saved.id);
-    setEditingId(''); setName(''); setUserId(''); setSalary(0); setCommission('0'); setDiscount('0');
+    setEditingId(''); setName(''); setUserId(''); setSalary(0); setCommission('0'); setDiscount('0'); setActive(true);
   };
 
   const startEditing = (entry: EmployeeProfile) => {
     setEditingId(entry.id); setName(entry.name); setUserId(entry.userId ?? '');
-    setSalary(entry.salaryCents / 100); setCommission(String(entry.commissionPercent)); setDiscount(String(entry.consumptionDiscountPercent));
+    setSalary(entry.salaryCents / 100); setCommission(String(entry.commissionPercent)); setDiscount(String(entry.consumptionDiscountPercent)); setActive(entry.active);
   };
 
   const addConsumption = async (event: FormEvent) => {
@@ -286,9 +291,10 @@ export function EmployeesModule() {
             <label className="space-y-1 text-sm">Salário mensal<CurrencyInput value={salary} onValueChange={(value) => setSalary(value ?? 0)} /></label>
             <label className="space-y-1 text-sm">Comissão (%)<Input type="number" min="0" max="100" step="0.01" value={commission} onChange={(event) => setCommission(event.target.value)} required /></label>
             <label className="space-y-1 text-sm">Desconto no consumo (%)<Input type="number" min="0" max="100" step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} required /></label>
-            <div className="flex items-end gap-2"><Button disabled={!ready} type="submit">{editingId ? 'Salvar funcionário' : 'Cadastrar funcionário'}</Button>{editingId && <Button type="button" variant="outline" onClick={() => { setEditingId(''); setName(''); setUserId(''); setSalary(0); setCommission('0'); setDiscount('0'); }}>Cancelar</Button>}</div>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} />Ativo para vendas e agendamentos</label>
+            <div className="flex items-end gap-2"><Button disabled={!ready} type="submit">{editingId ? 'Salvar funcionário' : 'Cadastrar funcionário'}</Button>{editingId && <Button type="button" variant="outline" onClick={() => { setEditingId(''); setName(''); setUserId(''); setSalary(0); setCommission('0'); setDiscount('0'); setActive(true); }}>Cancelar</Button>}</div>
           </form></Card>
-          <Card className="divide-y p-4">{records.employees.map((entry) => <div key={entry.id} className="flex items-center justify-between gap-3 py-2"><span>{entry.name} · {entry.commissionPercent}% comissão · {entry.consumptionDiscountPercent}% desconto</span><Button type="button" size="sm" variant="outline" onClick={() => startEditing(entry)}>Editar</Button></div>)}{!records.employees.length && <p className="text-sm text-muted-foreground">Nenhum funcionário cadastrado.</p>}</Card>
+          <Card className="divide-y p-4">{records.employees.map((entry) => <div key={entry.id} className="flex items-center justify-between gap-3 py-2"><span>{entry.name} · {entry.commissionPercent}% comissão · {entry.consumptionDiscountPercent}% desconto{!entry.active && ' · Inativo'}</span><Button type="button" size="sm" variant="outline" onClick={() => startEditing(entry)}>Editar</Button></div>)}{!records.employees.length && <p className="text-sm text-muted-foreground">Nenhum funcionário cadastrado.</p>}</Card>
         </TabsContent>
         <TabsContent value="consumption" className="space-y-4">
           <Card className="p-4"><form onSubmit={addConsumption} className="grid gap-3 sm:grid-cols-2">

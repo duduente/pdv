@@ -153,6 +153,26 @@ describe('employee integration', () => {
     expect(roster[1]).toMatchObject({ name: 'Nova pessoa', commissionPercent: 12.5 });
     expect(roster[1]).not.toHaveProperty('salaryCents');
     expect(roster[1]).not.toHaveProperty('consumptionDiscountPercent');
+    const professionals = JSON.parse(window.localStorage.getItem('professionals:store') ?? '[]');
+    expect(professionals).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'Nova pessoa' })]));
+    expect(professionals[1]).not.toHaveProperty('commissionPercent');
+  });
+
+  it('preserves the role and publishes deactivation with the employee transaction', async () => {
+    fixtures.remote = true;
+    fixtures.commit.mockResolvedValue(undefined);
+    const finances = fixtures.values['store-finances:store'] as { employees: { employees: { role?: string }[] } };
+    finances.employees.employees[0].role = 'Barbeiro';
+    await act(async () => { root.render(<EmployeesModule />); });
+    await act(async () => { button(container, 'Editar').click(); });
+    const active = field(container, 'Ativo para vendas e agendamentos');
+    await act(async () => { active.click(); });
+    await act(async () => { button(container, 'Salvar funcionário').closest('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
+    expect(fixtures.commit).toHaveBeenCalledOnce();
+    expect(fixtures.commit.mock.calls[0][1]).toMatchObject([
+      { value: { employees: { employees: [{ id: 'employee', role: 'Barbeiro', active: false }] } } },
+      { value: [{ id: 'employee', active: false }] },
+    ]);
   });
 
   it('does not record a consumption when inventory is insufficient', async () => {

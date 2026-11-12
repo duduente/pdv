@@ -7,6 +7,8 @@ import {
 import { usePersistentState } from './hooks/usePersistentState';
 import { useAuth } from './auth/AuthContext';
 import { supabase } from './lib/supabase';
+import { reconcileLocalEmployees } from './lib/localEmployeeIntegration';
+import { toast } from 'sonner';
 
 export type Screen = 'admin' | 'merchant' | 'public-booking' | 'public-menu';
 
@@ -29,9 +31,24 @@ const EMPTY_ESTABLISHMENTS: Establishment[] = [];
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
-  const [localEstablishments, setLocalEstablishments] = usePersistentState<Establishment[]>('establishments', initialData);
+  const [localEstablishments, setLocalEstablishments, localEstablishmentsLoaded] = usePersistentState<Establishment[]>('establishments', initialData);
   const [remoteEstablishments, setRemoteEstablishments] = useState<Establishment[] | null>(null);
   const usesRemoteAuth = Boolean(supabase && !user?.isDemo);
+  useEffect(() => {
+    if (!user?.isDemo || !localEstablishmentsLoaded) return;
+    try {
+      if (window.localStorage.getItem('employee-integration-v1')) return;
+      for (const establishment of localEstablishments) {
+        reconcileLocalEmployees(establishment.id, establishment.slug === 'barbearia-estilo' ? professionals : []);
+      }
+      setLocalEstablishments((current) => current.map((establishment) => ({
+        ...establishment, modules: { ...establishment.modules, finance: true, employees: true },
+      })));
+      window.localStorage.setItem('employee-integration-v1', '1');
+    } catch (error) {
+      toast.error(`Não foi possível integrar os funcionários locais: ${error instanceof Error ? error.message : 'erro de armazenamento.'}`);
+    }
+  }, [user?.isDemo, localEstablishmentsLoaded, localEstablishments, setLocalEstablishments]);
   const establishmentData = usesRemoteAuth ? remoteEstablishments ?? EMPTY_ESTABLISHMENTS : localEstablishments;
   const establishments = establishmentData.map((establishment) => ({
     ...establishment,
@@ -148,6 +165,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     if (template === 'grocery' || template === 'complete') {
       saveSeed('inventory', products);
+    }
+    if (!usesRemoteAuth) {
+      try {
+        reconcileLocalEmployees(establishment.id, []);
+      } catch (error) {
+        throw new Error(`Loja criada, mas não foi possível integrar os funcionários: ${error instanceof Error ? error.message : 'erro de armazenamento.'}`);
+      }
     }
   }, [setLocalEstablishments, user, usesRemoteAuth]);
 

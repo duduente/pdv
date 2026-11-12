@@ -1,12 +1,16 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   CalendarClock, Plus, Clock, DollarSign, Scissors, Users,
   Copy, Check, ExternalLink, Trash2, Calendar as CalIcon, Pencil,
 } from 'lucide-react';
 import { useApp } from '@/store';
+import { useAuth } from '@/auth/AuthContext';
 import { services as initialServices, professionals as initialPros, appointments as initialAppts, workingHours as initialHours, formatCurrency } from '@/mockData';
 import type { Service, Professional, Appointment, AppointmentStatus, CashRegisterData, WorkingHours } from '@/types';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { syncPersistentState, usePersistentState } from '@/hooks/usePersistentState';
+import { supabase } from '@/lib/supabase';
+import { EMPTY_STORE_FINANCES, type StoreFinances } from '@/lib/storeFinances';
+import type { EmployeeProfile, EmployeeRosterEntry } from '@/lib/employeeSettlement';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -345,24 +349,81 @@ function ServicesTab() {
 }
 
 function ProsTab() {
+  const { user } = useAuth();
+  const remote = Boolean(supabase && user && !user.isDemo);
+  return remote ? <RemoteProsTab /> : <LocalProsTab />;
+}
+
+function RemoteProsTab() {
   const { selectedEstablishment } = useApp();
+  const establishmentId = selectedEstablishment?.id ?? 'default';
+  const [items, , loaded] = usePersistentState<Professional[]>(`professionals:${establishmentId}`, [], { readOnly: true });
+
+  const add = async (name: string, role: string) => {
+    if (!supabase) throw new Error('O banco de dados não está configurado.');
+    const { data, error } = await supabase.rpc('create_appointment_professional', {
+      target_tenant: establishmentId, staff_name: name, staff_role: role,
+    });
+    if (error) throw new Error(error.message);
+    if (!Array.isArray(data) || !data.every((item: unknown) =>
+      typeof item === 'object' && item !== null
+      && 'id' in item && typeof item.id === 'string'
+      && 'name' in item && typeof item.name === 'string'
+      && 'role' in item && typeof item.role === 'string')) {
+      throw new Error('Profissional cadastrado, mas a lista não pôde ser atualizada. Recarregue a página.');
+    }
+    syncPersistentState(`professionals:${establishmentId}`, data);
+  };
+  return <ProfessionalsForm items={items} loaded={loaded} add={add} />;
+}
+
+function LocalProsTab() {
+  const { selectedEstablishment } = useApp();
+  const establishmentId = selectedEstablishment?.id ?? 'default';
   const isBarbershop = selectedEstablishment?.slug === 'barbearia-estilo';
   const [items, setItems] = usePersistentState<Professional[]>(
-    `professionals:${selectedEstablishment?.id ?? 'default'}`,
-    isBarbershop ? initialPros : [],
+    `professionals:${establishmentId}`, isBarbershop ? initialPros : [],
   );
+  const [finances, setFinances, financesLoaded] = usePersistentState<StoreFinances>(`store-finances:${establishmentId}`, EMPTY_STORE_FINANCES);
+  const [roster, setRoster, rosterLoaded] = usePersistentState<EmployeeRosterEntry[]>(`employee-roster:${establishmentId}`, []);
+
+  const add = async (name: string, role: string) => {
+    const employee: EmployeeProfile = {
+      id: crypto.randomUUID(), name, role: role || 'Profissional',
+      salaryCents: 0, commissionPercent: 0, consumptionDiscountPercent: 0, active: true,
+    };
+    const records = finances.employees ?? { employees: [], consumptions: [], settlements: [] };
+    setFinances({ ...finances, employees: { ...records, employees: [...records.employees, employee] } });
+    setRoster([...roster, { id: employee.id, name, commissionPercent: 0, active: true }]);
+    setItems([...items, { id: employee.id, name, role: employee.role ?? 'Profissional' }]);
+  };
+  return <ProfessionalsForm items={items} loaded={financesLoaded && rosterLoaded} add={add} />;
+}
+
+function ProfessionalsForm({ items, loaded, add }: {
+  items: Professional[];
+  loaded: boolean;
+  add: (name: string, role: string) => Promise<void>;
+}) {
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
-
-  const add = () => {
-    if (!name) { toast.error('Informe o nome'); return; }
-    setItems((prev) => [...prev, { id: `p${Date.now()}`, name, role: role || 'Profissional' }]);
-    setName(''); setRole('');
-    toast.success('Profissional adicionado!');
-  };
-
-  const remove = (id: string) => {
-    setItems((prev) => prev.filter((p) => p.id !== id));
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const submit = async () => {
+    if (!name.trim()) { toast.error('Informe o nome'); return; }
+    if (!loaded || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await add(name.trim(), role.trim());
+      setName(''); setRole('');
+      toast.success('Profissional cadastrado em Funcionários!');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível cadastrar o profissional.');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   return (
@@ -382,7 +443,9 @@ function ProsTab() {
             <Input value={role} onChange={(e) => setRole(e.target.value)} placeholder="Ex: Barbeiro" />
           </div>
         </div>
-        <Button className="mt-3" size="sm" onClick={add}>
+        <p className="mt-3 text-xs text-muted-foreground">Os profissionais também são cadastrados em Funcionários. Os dados financeiros começam em zero.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Para retirar alguém da agenda, edite seu cadastro em Funcionários e desative-o.</p>
+        <Button className="mt-3" size="sm" onClick={submit} disabled={!loaded || saving}>
           <Plus className="h-4 w-4 mr-1" />
           Adicionar
         </Button>
@@ -400,9 +463,6 @@ function ProsTab() {
                 <p className="text-xs text-muted-foreground">{p.role}</p>
               </div>
             </div>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => remove(p.id)}>
-              <Trash2 className="h-4 w-4" />
-            </Button>
           </Card>
         ))}
       </div>
@@ -424,6 +484,7 @@ function CalendarTab() {
   const [professionals] = usePersistentState<Professional[]>(
     `professionals:${selectedEstablishment?.id ?? 'default'}`,
     isBarbershop ? initialPros : [],
+    { readOnly: true },
   );
   const [selectedDate, setSelectedDate] = useState(() => {
     const now = new Date();
