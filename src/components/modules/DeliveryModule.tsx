@@ -33,12 +33,17 @@ const PAYMENT_OPTIONS: { value: PaymentMethod; label: string }[] = [
   { value: 'debito', label: 'Cartão de débito' },
   { value: 'outro', label: 'Outro' },
 ];
-const STATUS_DETAILS: Record<DeliveryStatus, { label: string; className: string }> = {
-  production: { label: 'EM PRODUÇÃO', className: 'border-yellow-300 bg-yellow-100 text-yellow-900' },
-  dispatched: { label: 'DESPACHADO', className: 'border-red-300 bg-red-100 text-red-900' },
-  finalized: { label: 'FINALIZADO', className: 'border-slate-300 bg-slate-200 text-slate-700' },
-  cancelled: { label: 'CANCELADO', className: 'border-red-300 bg-red-100 text-red-900' },
+const STATUS_DETAILS: Record<DeliveryStatus, { label: string; textClassName: string; dotClassName: string }> = {
+  production: { label: 'EM PRODUÇÃO', textClassName: 'text-amber-700 dark:text-amber-400', dotClassName: 'bg-amber-500' },
+  dispatched: { label: 'DESPACHADO', textClassName: 'text-blue-700 dark:text-blue-400', dotClassName: 'bg-blue-600' },
+  finalized: { label: 'FINALIZADO', textClassName: 'text-emerald-700 dark:text-emerald-400', dotClassName: 'bg-emerald-600' },
+  cancelled: { label: 'CANCELADO', textClassName: 'text-red-700 dark:text-red-400', dotClassName: 'bg-red-600' },
 };
+
+const ORDER_TYPE_DETAILS = {
+  pickup: { label: 'RETIRADA', textClassName: 'text-sky-700 dark:text-sky-400' },
+  delivery: { label: 'ENTREGA', textClassName: 'text-violet-700 dark:text-violet-400' },
+} as const;
 
 function parseOrders(value: unknown): MenuOrder[] {
   if (!Array.isArray(value)) throw new Error('Os pedidos recebidos do servidor estão em formato inválido.');
@@ -680,6 +685,7 @@ export function DeliveryModule() {
             const status = order.deliveryStatus ?? (order.status === 'paid' ? 'finalized' : 'production');
             const statusInfo = STATUS_DETAILS[status];
             const isPickup = order.orderType === 'pickup';
+            const orderTypeInfo = ORDER_TYPE_DETAILS[isPickup ? 'pickup' : 'delivery'];
             const driver = drivers.find((entry) => entry.id === order.driverId);
             const hasActiveDriver = drivers.some((entry) => entry.id === order.driverId && entry.active);
             const total = order.total + (order.deliveryFee ?? 0);
@@ -712,12 +718,15 @@ export function DeliveryModule() {
                     <span className="min-w-0 flex-1">
                       <span className="flex flex-wrap items-center gap-2">
                         <span className="truncate font-semibold">{order.customerName || 'Pedido do cardápio'}</span>
-                        <Badge variant="outline" className={`px-2 py-0.5 text-xs font-semibold ${isPickup ? 'border-blue-300 bg-blue-100 text-blue-900' : 'border-violet-300 bg-violet-100 text-violet-900'}`}>{isPickup ? 'RETIRADA' : 'ENTREGA'}</Badge>
-                        <Badge variant="outline" className={`px-2 py-0.5 text-xs font-semibold ${statusInfo.className}`}>{isPickup && status === 'dispatched' ? 'PRONTO PARA RETIRADA' : statusInfo.label}</Badge>
+                        <span className={`inline-flex items-center gap-1.5 text-xs font-semibold ${statusInfo.textClassName}`}>
+                          <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${statusInfo.dotClassName}`} />
+                          {isPickup && status === 'dispatched' ? 'PRONTO PARA RETIRADA' : statusInfo.label}
+                        </span>
                       </span>
                       <span className="mt-0.5 block truncate text-xs text-muted-foreground">Pedido {order.id.slice(0, 8)} · {new Date(order.createdAt).toLocaleString('pt-BR')}{driver ? ` · ${driver.name}` : ''}</span>
                     </span>
-                    <span className="flex items-center gap-2">
+                    <span className="flex shrink-0 items-center gap-3">
+                      <span className={`text-sm font-bold ${orderTypeInfo.textClassName}`}>{orderTypeInfo.label}</span>
                       <span className="whitespace-nowrap text-sm font-semibold">{formatCurrency(total)}</span>
                       <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                     </span>

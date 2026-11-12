@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { AlertTriangle, Bell, Check, Pencil, Plus, RefreshCw, Trash2, WalletCards } from 'lucide-react';
+import { Bell, Check, Pencil, Plus, RefreshCw, Trash2, WalletCards } from 'lucide-react';
 import { useApp } from '@/store';
 import { useAuth } from '@/auth/AuthContext';
 import { formatCurrency } from '@/mockData';
@@ -62,25 +62,44 @@ const ALERT_LABELS = {
   none: 'Sem vencimento',
 } as const;
 
-const ALERT_BADGE_CLASSES: Record<BillAlert, string> = {
-  paid: 'border-emerald-300 bg-emerald-50 text-emerald-800',
-  overdue: 'border-red-300 bg-red-50 text-red-800',
-  'due-today': 'border-orange-300 bg-orange-50 text-orange-900',
-  'due-soon': 'border-yellow-300 bg-yellow-50 text-yellow-900',
-  upcoming: 'border-slate-300 bg-slate-100 text-slate-700',
-  expired: 'border-red-300 bg-red-50 text-red-800',
-  none: 'border-slate-300 bg-slate-100 text-slate-700',
+const ALERT_STATUS_CLASSES: Record<BillAlert, string> = {
+  paid: 'text-emerald-700 dark:text-emerald-400',
+  overdue: 'text-red-700 dark:text-red-400',
+  'due-today': 'text-orange-700 dark:text-orange-400',
+  'due-soon': 'text-amber-700 dark:text-amber-400',
+  upcoming: 'text-slate-600 dark:text-slate-300',
+  expired: 'text-red-700 dark:text-red-400',
+  none: 'text-slate-500 dark:text-slate-400',
+};
+
+const ALERT_DOT_CLASSES: Record<BillAlert, string> = {
+  paid: 'bg-emerald-600',
+  overdue: 'bg-red-600',
+  'due-today': 'bg-orange-500',
+  'due-soon': 'bg-amber-500',
+  upcoming: 'bg-slate-400',
+  expired: 'bg-red-600',
+  none: 'bg-slate-400',
 };
 
 const DUE_DATE_CLASSES: Record<BillAlert, string> = {
-  paid: 'text-emerald-800',
-  overdue: 'text-red-800',
-  'due-today': 'text-orange-900',
-  'due-soon': 'text-yellow-900',
-  upcoming: 'text-slate-700',
-  expired: 'text-red-800',
+  paid: 'text-emerald-700 dark:text-emerald-400',
+  overdue: 'text-red-700 dark:text-red-400',
+  'due-today': 'text-orange-700 dark:text-orange-400',
+  'due-soon': 'text-amber-700 dark:text-amber-400',
+  upcoming: 'text-slate-600 dark:text-slate-300',
+  expired: 'text-red-700 dark:text-red-400',
   none: 'text-muted-foreground',
 };
+
+function BillStatusIndicator({ alert, label }: { alert: BillAlert; label: string }) {
+  return (
+    <span className={cn('inline-flex items-center gap-1.5 text-xs font-semibold', ALERT_STATUS_CLASSES[alert])}>
+      <span aria-hidden="true" className={cn('h-2 w-2 shrink-0 rounded-full', ALERT_DOT_CLASSES[alert])} />
+      {label}
+    </span>
+  );
+}
 
 export function FinanceModule() {
   const { selectedEstablishment } = useApp();
@@ -103,11 +122,11 @@ export function FinanceModule() {
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
   const [dueDate, setDueDate] = useState(() => localDateKey(new Date()));
+  const [paymentType, setPaymentType] = useState<'boleto' | 'pix'>('boleto');
   const [isRecurring, setIsRecurring] = useState(false);
   const [boletoCode, setBoletoCode] = useState('');
-  const [validUntil, setValidUntil] = useState('');
   const [editingBillId, setEditingBillId] = useState<string | null>(null);
-  const [billDraft, setBillDraft] = useState<Pick<FinanceBill, 'description' | 'amount' | 'dueDate' | 'boletoCode' | 'validUntil' | 'isRecurring'> | null>(null);
+  const [billDraft, setBillDraft] = useState<Pick<FinanceBill, 'description' | 'amount' | 'dueDate' | 'boletoCode' | 'paymentType' | 'isRecurring'> | null>(null);
 
   const refreshKitoBilling = useCallback(async (showLoading = false) => {
     const requestId = ++billingRequestId.current;
@@ -219,7 +238,8 @@ export function FinanceModule() {
         amount: Math.round(value * 100) / 100,
         dueDate,
         boletoCode: boletoCode.trim(),
-        validUntil,
+        paymentType,
+        validUntil: '',
         ...(isRecurring && {
           isRecurring: true,
           recurrenceId: id,
@@ -231,10 +251,10 @@ export function FinanceModule() {
     setDescription('');
     setAmount('');
     setDueDate(localDateKey(new Date()));
+    setPaymentType('boleto');
     setIsRecurring(false);
     setBoletoCode('');
-    setValidUntil('');
-    toast.success(isRecurring ? 'Boleto recorrente cadastrado.' : 'Boleto cadastrado.');
+    toast.success(isRecurring ? 'Conta recorrente cadastrada.' : 'Conta cadastrada.');
   };
 
   const beginEdit = (bill: FinanceBill) => {
@@ -245,7 +265,7 @@ export function FinanceModule() {
       amount: bill.amount,
       dueDate: bill.dueDate,
       boletoCode: bill.boletoCode,
-      validUntil: bill.validUntil,
+      paymentType: bill.paymentType ?? 'boleto',
       isRecurring: bill.isRecurring ?? false,
     });
   };
@@ -266,6 +286,7 @@ export function FinanceModule() {
           if (bill.id === editingBillId) return {
             ...bill,
             ...billDraft,
+            validUntil: '',
             description: billDraft.description.trim(),
             amount: Math.round(value * 100) / 100,
             boletoCode: billDraft.boletoCode.trim(),
@@ -365,10 +386,10 @@ export function FinanceModule() {
               <Card key={bill.id} className="space-y-2 p-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="font-semibold">{bill.description}</h3>
-                  <Badge variant="outline" className={ALERT_BADGE_CLASSES[alert]}>
-                    {alert === 'overdue' || alert === 'expired' ? <AlertTriangle className="mr-1 h-3 w-3" /> : null}
-                    {billStatus === 'pending' ? ALERT_LABELS[alert] : CUSTOMER_BILL_STATUS_LABELS[billStatus]}
-                  </Badge>
+                  <BillStatusIndicator
+                    alert={alert}
+                    label={billStatus === 'pending' ? ALERT_LABELS[alert] : CUSTOMER_BILL_STATUS_LABELS[billStatus]}
+                  />
                   {bill.recurringMonth && <Badge variant="outline">Mensalidade · {formatBillMonth(bill.recurringMonth)}</Badge>}
                   {paymentOptions.length === 0 && <Badge variant="outline">{bill.paymentType === 'pix' ? 'Pix' : 'Boleto'}</Badge>}
                 </div>
@@ -415,16 +436,21 @@ export function FinanceModule() {
 
       <Card className="space-y-4 p-5">
         <div>
-          <h2 className="font-semibold">Adicionar boleto ou cobrança avulsa</h2>
-          <p className="text-sm text-muted-foreground">Registre boletos e contas da própria loja. Eles são separados das cobranças da mensalidade Kito, que só o Super Admin pode gerenciar.</p>
+          <h2 className="font-semibold">Registrar conta a pagar</h2>
+          <p className="text-sm text-muted-foreground">Cadastre uma conta da loja como boleto ou Pix e informe a data de vencimento. Essas contas são separadas das cobranças da mensalidade Kito.</p>
         </div>
         <form className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5" onSubmit={addBill}>
           <fieldset disabled={!financesLoaded} className="contents">
-            <label className="space-y-1 text-sm font-medium">Nome do boleto/conta<Input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Ex.: Internet, aluguel, energia" maxLength={100} required /></label>
+            <label className="space-y-1 text-sm font-medium">Nome da conta<Input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Ex.: Internet, aluguel, energia" maxLength={100} required /></label>
             <label className="space-y-1 text-sm font-medium">Valor (R$)<CurrencyInput value={Number(amount) || 0} onValueChange={(value) => setAmount(value === null ? '' : String(value))} required /></label>
             <label className="space-y-1 text-sm font-medium">Vencimento<Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} required /></label>
-            <label className="space-y-1 text-sm font-medium">Código do boleto<Input value={boletoCode} onChange={(event) => setBoletoCode(event.target.value)} /></label>
-            <label className="space-y-1 text-sm font-medium">Validade do boleto<Input type="date" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} /></label>
+            <label className="space-y-1 text-sm font-medium">Forma de pagamento
+              <select value={paymentType} onChange={(event) => setPaymentType(event.target.value as 'boleto' | 'pix')} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                <option value="boleto">Boleto</option>
+                <option value="pix">Pix</option>
+              </select>
+            </label>
+            <label className="space-y-1 text-sm font-medium">{paymentType === 'pix' ? 'Chave ou código Pix' : 'Código do boleto'}<Input value={boletoCode} onChange={(event) => setBoletoCode(event.target.value)} /></label>
             <label className="flex items-center gap-2 text-sm font-medium sm:col-span-2 lg:col-span-5">
               <input type="checkbox" checked={isRecurring} onChange={(event) => setIsRecurring(event.target.checked)} />
               Repetir este boleto todo mês
@@ -444,11 +470,16 @@ export function FinanceModule() {
             <Card key={bill.id} className="space-y-3 p-4">
               {isEditing ? (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                  <label className="space-y-1 text-sm font-medium">Nome do boleto/conta<Input value={billDraft.description} onChange={(event) => setBillDraft({ ...billDraft, description: event.target.value })} maxLength={100} /></label>
+                  <label className="space-y-1 text-sm font-medium">Nome da conta<Input value={billDraft.description} onChange={(event) => setBillDraft({ ...billDraft, description: event.target.value })} maxLength={100} /></label>
                   <label className="space-y-1 text-sm font-medium">Valor (R$)<CurrencyInput value={billDraft.amount} onValueChange={(value) => setBillDraft({ ...billDraft, amount: value ?? 0 })} /></label>
                   <label className="space-y-1 text-sm font-medium">Vencimento<Input type="date" value={billDraft.dueDate} onChange={(event) => setBillDraft({ ...billDraft, dueDate: event.target.value })} /></label>
-                  <label className="space-y-1 text-sm font-medium">Código do boleto<Input value={billDraft.boletoCode} onChange={(event) => setBillDraft({ ...billDraft, boletoCode: event.target.value })} /></label>
-                  <label className="space-y-1 text-sm font-medium">Validade<Input type="date" value={billDraft.validUntil} onChange={(event) => setBillDraft({ ...billDraft, validUntil: event.target.value })} /></label>
+                  <label className="space-y-1 text-sm font-medium">Forma de pagamento
+                    <select value={billDraft.paymentType ?? 'boleto'} onChange={(event) => setBillDraft({ ...billDraft, paymentType: event.target.value as 'boleto' | 'pix' })} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                      <option value="boleto">Boleto</option>
+                      <option value="pix">Pix</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1 text-sm font-medium">{billDraft.paymentType === 'pix' ? 'Chave ou código Pix' : 'Código do boleto'}<Input value={billDraft.boletoCode} onChange={(event) => setBillDraft({ ...billDraft, boletoCode: event.target.value })} /></label>
                   <div className="flex gap-2 sm:col-span-2 lg:col-span-5">
                     <label className="flex items-center gap-2 text-sm font-medium">
                       <input type="checkbox" checked={billDraft.isRecurring ?? false} onChange={(event) => setBillDraft({ ...billDraft, isRecurring: event.target.checked })} />
@@ -465,17 +496,13 @@ export function FinanceModule() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-semibold">{bill.description}</h3>
-                      <Badge variant="outline" className={ALERT_BADGE_CLASSES[alert]}>
-                        {alert === 'overdue' || alert === 'expired' ? <AlertTriangle className="mr-1 h-3 w-3" /> : null}
-                        {ALERT_LABELS[alert]}
-                      </Badge>
-                      {bill.paymentType && <Badge variant="outline">{bill.paymentType === 'pix' ? 'Pix' : 'Boleto'}</Badge>}
+                      <BillStatusIndicator alert={alert} label={ALERT_LABELS[alert]} />
+                      <Badge variant="outline">{bill.paymentType === 'pix' ? 'Pix' : 'Boleto'}</Badge>
                       {bill.isRecurring && <Badge variant="outline">Mensal</Badge>}
                     </div>
                     <p className={cn('mt-1 text-base font-semibold', DUE_DATE_CLASSES[alert])}>Vencimento: {new Date(`${bill.dueDate}T00:00:00`).toLocaleDateString('pt-BR')}</p>
                     <p className="text-sm text-muted-foreground">Valor: {formatCurrency(bill.amount)}</p>
                     {bill.boletoCode && <p className="break-all text-sm text-muted-foreground">{bill.paymentType === 'pix' ? 'Chave ou código Pix' : 'Código do boleto'}: {bill.boletoCode}</p>}
-                    {bill.validUntil && <p className="text-sm text-muted-foreground">Validade: {new Date(`${bill.validUntil}T00:00:00`).toLocaleDateString('pt-BR')}</p>}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button type="button" size="sm" variant="outline" disabled={!financesLoaded} onClick={() => togglePaid(bill.id)}>

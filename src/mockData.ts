@@ -16,6 +16,7 @@ export const MODULE_LABELS: Record<string, string> = {
   estoque: 'Controle de Estoque & Clientes',
   comandas: 'Comandas',
   delivery: 'Delivery',
+  finance: 'Finanças',
 };
 
 export const MODULE_ICONS: Record<string, string> = {
@@ -24,6 +25,7 @@ export const MODULE_ICONS: Record<string, string> = {
   pdv: 'Calculator',
   estoque: 'Package',
   delivery: 'Bike',
+  finance: 'WalletCards',
 };
 
 export const establishments: Establishment[] = [
@@ -43,6 +45,7 @@ export const establishments: Establishment[] = [
       estoque: false,
       comandas: false,
       delivery: false,
+      finance: true,
     },
     theme: {
       name: 'Barbearia Estilo',
@@ -67,6 +70,7 @@ export const establishments: Establishment[] = [
       estoque: false,
       comandas: true,
       delivery: true,
+      finance: true,
     },
     theme: {
       name: 'Burger House',
@@ -91,6 +95,7 @@ export const establishments: Establishment[] = [
       estoque: true,
       comandas: false,
       delivery: false,
+      finance: true,
     },
     theme: {
       name: 'Mercadinho Central',
@@ -115,6 +120,7 @@ export const establishments: Establishment[] = [
       estoque: true,
       comandas: true,
       delivery: true,
+      finance: true,
     },
     theme: {
       name: 'Loja Completa',

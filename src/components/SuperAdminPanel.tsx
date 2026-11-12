@@ -36,6 +36,7 @@ const MODULE_META: Record<ModuleKey, { label: string; icon: typeof CalendarClock
   estoque: { label: 'Controle de Estoque & Clientes', icon: Package },
   comandas: { label: 'Comandas', icon: ClipboardList },
   delivery: { label: 'Delivery', icon: Bike },
+  finance: { label: 'Finanças', icon: WalletCards },
 };
 
 export function SuperAdminPanel() {
@@ -64,6 +65,7 @@ export function SuperAdminPanel() {
     estoque: establishments.filter((e) => e.modules.estoque).length,
     comandas: establishments.filter((e) => e.modules.comandas).length,
     delivery: establishments.filter((e) => e.modules.delivery).length,
+    finance: establishments.filter((e) => e.modules.finance).length,
   };
 
   const activeModules = Object.entries(moduleCounts).sort(([, a], [, b]) => b - a)[0];
@@ -421,6 +423,7 @@ function CreateEstablishmentModal({
     estoque: false,
     comandas: false,
     delivery: false,
+    finance: false,
   });
   const [error, setError] = useState('');
 

@@ -1,4 +1,4 @@
-export type ModuleKey = 'agendamento' | 'cardapio' | 'pdv' | 'estoque' | 'comandas' | 'delivery';
+export type ModuleKey = 'agendamento' | 'cardapio' | 'pdv' | 'estoque' | 'comandas' | 'delivery' | 'finance';
 export type AppPermission =
   | 'dashboard'
   | 'agendamento'

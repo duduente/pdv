@@ -39,6 +39,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ...establishment.modules,
       comandas: establishment.modules.comandas ?? Boolean(establishment.modules.cardapio),
       delivery: establishment.modules.delivery ?? Boolean(establishment.modules.cardapio),
+      finance: establishment.modules.finance ?? true,
     },
   }));
 

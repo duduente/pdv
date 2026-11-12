@@ -42,6 +42,7 @@ const MODULE_ICONS: Record<ModuleKey, typeof CalendarClock> = {
   estoque: Package,
   comandas: ClipboardList,
   delivery: Bike,
+  finance: WalletCards,
 };
 
 const EMPTY_CASH_REGISTER: CashRegisterData = {
@@ -101,11 +102,9 @@ export function MerchantPanel() {
     const settingsAllowed = hasStorePermission(user, establishment.id, 'store-settings')
       || hasStorePermission(user, establishment.id, 'manage-users')
       || (establishment.modules.delivery && hasStorePermission(user, establishment.id, 'delivery'));
-    const financeAllowed = hasStorePermission(user, establishment.id, 'finance');
     const allowedViews: MerchantView[] = [
       ...(hasStorePermission(user, establishment.id, 'dashboard') ? ['dashboard' as const] : []),
       ...(settingsAllowed ? ['settings' as const] : []),
-      ...(financeAllowed ? ['finance' as const] : []),
       ...modules,
     ];
     setView((current) => allowedViews.includes(current) ? current : allowedViews[0] ?? 'dashboard');
@@ -122,7 +121,7 @@ export function MerchantPanel() {
   const canViewSettings = hasStorePermission(user, est.id, 'store-settings')
     || hasStorePermission(user, est.id, 'manage-users')
     || (est.modules.delivery && hasStorePermission(user, est.id, 'delivery'));
-  const canViewFinance = hasStorePermission(user, est.id, 'finance');
+  const canViewFinance = est.modules.finance && hasStorePermission(user, est.id, 'finance');
   const canViewCashReports = hasStorePermission(user, est.id, 'pdv-reports');
   const canViewCash = canAccessModule('pdv');
   const todayStart = new Date();
@@ -238,12 +237,6 @@ export function MerchantPanel() {
             active={view === 'settings'}
             onClick={() => setView('settings')}
           />}
-          {canViewFinance && <SidebarItem
-            icon={WalletCards}
-            label="Finanças"
-            active={view === 'finance'}
-            onClick={() => setView('finance')}
-          />}
           <div className="my-2 h-px bg-border" />
           <p className="mb-1 hidden px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground md:block">
             Módulos Ativos
@@ -353,7 +346,7 @@ export function MerchantPanel() {
                   <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="period" tickLine={false} axisLine={false} />
-                    <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                    <YAxis tickFormatter={(value: number) => formatCurrency(value)} tickLine={false} axisLine={false} width={104} />
                     <Tooltip formatter={(value) => formatCurrency(Number(value))} />
                     <Legend />
                     <Line type="monotone" dataKey="vendas" name="Vendas" stroke="#3f7c78" strokeWidth={2} dot={false} />
@@ -364,7 +357,7 @@ export function MerchantPanel() {
                   <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="period" tickLine={false} axisLine={false} />
-                    <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                    <YAxis tickFormatter={(value: number) => formatCurrency(value)} tickLine={false} axisLine={false} width={104} />
                     <Tooltip formatter={(value) => formatCurrency(Number(value))} />
                     <Legend />
                     <Bar dataKey="vendas" name="Vendas" fill="#3f7c78" radius={[6, 6, 0, 0]} />
@@ -395,7 +388,7 @@ export function MerchantPanel() {
                     <LineChart data={professionalChartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} />
                       <XAxis dataKey="professional" tickLine={false} axisLine={false} />
-                      <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                      <YAxis tickFormatter={(value: number) => formatCurrency(value)} tickLine={false} axisLine={false} width={104} />
                       <Tooltip formatter={(value) => formatCurrency(Number(value))} />
                       <Line type="monotone" dataKey="revenue" name="Faturamento" stroke="#3f7c78" strokeWidth={2} />
                     </LineChart>
@@ -403,7 +396,7 @@ export function MerchantPanel() {
                     <BarChart data={professionalChartData} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} />
                       <XAxis dataKey="professional" tickLine={false} axisLine={false} />
-                      <YAxis tickFormatter={(value: number) => `R$ ${value}`} tickLine={false} axisLine={false} width={72} />
+                      <YAxis tickFormatter={(value: number) => formatCurrency(value)} tickLine={false} axisLine={false} width={104} />
                       <Tooltip formatter={(value) => formatCurrency(Number(value))} />
                       <Bar dataKey="revenue" name="Faturamento" fill="#3f7c78" radius={[6, 6, 0, 0]} />
                     </BarChart>
