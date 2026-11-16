@@ -61,6 +61,8 @@ export function SupportChat({ establishmentId, establishmentName }: {
           }
           if (current.closedAt && current.closedAt !== known.closedAt) {
             toast.info('O atendimento foi finalizado.');
+            setConversation(null);
+            return;
           }
           if (current.messages.some((message) =>
             message.sender === 'admin' && !known.messageIds.has(message.id),

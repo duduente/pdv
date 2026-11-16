@@ -47,6 +47,7 @@ export function SupportInbox({ active, onUnreadCountChange }: { active: boolean;
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [showFinished, setShowFinished] = useState(false);
   const alertInterval = useRef<number | null>(null);
   const loadErrorShown = useRef(false);
   const seenErrorShown = useRef(false);
@@ -86,6 +87,16 @@ export function SupportInbox({ active, onUnreadCountChange }: { active: boolean;
   const selectedConversationId = selected?.id ?? null;
   const selectedClosedAt = selected?.closedAt ?? null;
   const isDrafting = Boolean(draft.trim());
+
+  const filteredConversations = useMemo(() => {
+    const hasHumanRequest = (c: SupportConversation) => c.humanRequestedAt;
+    const isOpen = (c: SupportConversation) => !c.closedAt;
+    const isFinished = (c: SupportConversation) => !!c.closedAt;
+    
+    const withHuman = conversations.filter(hasHumanRequest);
+    return showFinished ? withHuman.filter(isFinished) : withHuman.filter(isOpen);
+  }, [conversations, showFinished]);
+
   useEffect(() => { onUnreadCountChange(unreadCount); }, [onUnreadCountChange, unreadCount]);
 
   useEffect(() => {
@@ -205,19 +216,39 @@ export function SupportInbox({ active, onUnreadCountChange }: { active: boolean;
 
   return (
     <Card className="overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-5">
-        <div>
-          <h2 className="flex items-center gap-2 font-semibold"><Headphones className="h-5 w-5" />Atendimentos de suporte</h2>
-          <p className="text-sm text-muted-foreground">Converse com usuários que solicitaram ajuda humana.</p>
+      <div className="flex flex-col gap-3 border-b p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="flex items-center gap-2 font-semibold"><Headphones className="h-5 w-5" />Atendimentos de suporte</h2>
+            <p className="text-sm text-muted-foreground">Converse com usuários que solicitaram ajuda humana.</p>
+          </div>
+          <Badge variant={unreadHumanThreads.length ? 'destructive' : 'secondary'}>
+            {unreadCount ? `${unreadCount} não lida(s)` : `${conversations.filter((item) => item.humanRequestedAt && !item.closedAt).length} atendimentos ativos`}
+          </Badge>
         </div>
-        <Badge variant={unreadHumanThreads.length ? 'destructive' : 'secondary'}>
-          {unreadCount ? `${unreadCount} não lida(s)` : `${conversations.filter((item) => item.humanRequestedAt && !item.closedAt).length} atendimentos ativos`}
-        </Badge>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant={!showFinished ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setShowFinished(false)}
+          >
+            Em Aberto ({conversations.filter((item) => item.humanRequestedAt && !item.closedAt).length})
+          </Button>
+          <Button
+            type="button"
+            variant={showFinished ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setShowFinished(true)}
+          >
+            Finalizados ({conversations.filter((item) => item.humanRequestedAt && item.closedAt).length})
+          </Button>
+        </div>
       </div>
       <div className="grid min-h-[22rem] md:grid-cols-[minmax(13rem,0.8fr)_minmax(0,1.5fr)]">
         <div className="border-b md:border-b-0 md:border-r">
           <ScrollArea className="h-80 md:h-[25rem]">
-            {conversations.filter((item) => item.humanRequestedAt).map((conversation) => {
+            {filteredConversations.map((conversation) => {
               const isUnread = unreadHumanThreads.some((item) => item.id === conversation.id);
               return (
                 <button
@@ -236,7 +267,7 @@ export function SupportInbox({ active, onUnreadCountChange }: { active: boolean;
                 </button>
               );
             })}
-            {!conversations.some((item) => item.humanRequestedAt) && <p className="p-5 text-sm text-muted-foreground">Nenhum pedido de suporte humano no momento.</p>}
+            {!filteredConversations.length && <p className="p-5 text-sm text-muted-foreground">Nenhum atendimento {showFinished ? 'finalizado' : 'em aberto'}.</p>}
           </ScrollArea>
         </div>
         <div className="flex h-[25rem] max-h-[calc(100vh-12rem)] min-h-0 min-w-0 flex-col">
