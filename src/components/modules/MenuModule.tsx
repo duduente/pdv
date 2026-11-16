@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   UtensilsCrossed, Plus, Trash2, Copy, Check, ExternalLink,
-  MessageCircle, Image as ImageIcon, DollarSign, Pencil, ChevronUp, ChevronDown, X,
+  MessageCircle, Image as ImageIcon, DollarSign, Pencil, ChevronUp, ChevronDown, X, Upload,
 } from 'lucide-react';
 import { useApp } from '@/store';
+import { useAuth } from '@/auth/AuthContext';
 import { menuItems as initialItems, menuCategories as initialCats, formatCurrency } from '@/mockData';
 import type { MenuItem, MenuCategory } from '@/types';
 import { usePersistentState } from '@/hooks/usePersistentState';
+import { uploadProductImage } from '@/lib/imageUpload';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -85,6 +87,7 @@ function CopyLinkButton({ slug }: { slug: string }) {
 
 function ItemsTab() {
   const { selectedEstablishment } = useApp();
+  const { user } = useAuth();
   const isBurgerHouse = selectedEstablishment?.slug === 'burger-house';
   const [items, setItems] = usePersistentState<MenuItem[]>(
     `menu-items:${selectedEstablishment?.id ?? 'default'}`,
@@ -96,24 +99,67 @@ function ItemsTab() {
   const [unitCost, setUnitCost] = useState('');
   const [cat, setCat] = useState(initialCats[0]?.name ?? '');
   const [image, setImage] = useState('');
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const clearForm = () => {
-    setEditingId(null); setName(''); setDesc(''); setPrice(''); setUnitCost(''); setImage(''); setCat(initialCats[0]?.name ?? '');
+    setEditingId(null);
+    setName('');
+    setDesc('');
+    setPrice('');
+    setUnitCost('');
+    setImage('');
+    setCat(initialCats[0]?.name ?? '');
     setEditorOpen(false);
   };
 
   const addItem = () => {
-    setEditingId(null); setName(''); setDesc(''); setPrice(''); setUnitCost(''); setImage(''); setCat(initialCats[0]?.name ?? '');
+    setEditingId(null);
+    setName('');
+    setDesc('');
+    setPrice('');
+    setUnitCost('');
+    setImage('');
+    setCat(initialCats[0]?.name ?? '');
     setEditorOpen(true);
+  };
+
+  const handleImageUpload = async (file?: File) => {
+    if (!file || !user) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Selecione um arquivo de imagem.');
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      toast.error('A imagem deve ter até 8 MB.');
+      return;
+    }
+    setUploadingImage(true);
+    try {
+      const imageUrl = await uploadProductImage('product-images', user.id, Boolean(user.isDemo), file);
+      setImage(imageUrl);
+      toast.success('Foto carregada com sucesso!');
+    } catch (reason) {
+      toast.error(reason instanceof Error ? reason.message : 'Não foi possível carregar a foto.');
+    } finally {
+      setUploadingImage(false);
+      if (imageInputRef.current) imageInputRef.current.value = '';
+    }
   };
 
   const saveItem = () => {
     const numericPrice = Number(price);
     const numericUnitCost = unitCost.trim() ? Number(unitCost) : undefined;
-    if (!name.trim() || !Number.isFinite(numericPrice) || numericPrice <= 0) { toast.error('Informe nome e um preço maior que zero'); return; }
-    if (numericUnitCost !== undefined && (!Number.isFinite(numericUnitCost) || numericUnitCost < 0)) { toast.error('O custo deve ser um valor maior ou igual a zero'); return; }
+    if (!name.trim() || !Number.isFinite(numericPrice) || numericPrice <= 0) {
+      toast.error('Informe nome e um preço maior que zero');
+      return;
+    }
+    if (numericUnitCost !== undefined && (!Number.isFinite(numericUnitCost) || numericUnitCost < 0)) {
+      toast.error('O custo deve ser um valor maior ou igual a zero');
+      return;
+    }
     const nextItem: MenuItem = {
       id: editingId ?? `m${Date.now()}`,
       name: name.trim(),
@@ -136,7 +182,13 @@ function ItemsTab() {
   };
 
   const editItem = (item: MenuItem) => {
-    setEditingId(item.id); setName(item.name); setDesc(item.description); setPrice(String(item.price)); setUnitCost(item.unitCost === undefined ? '' : String(item.unitCost)); setCat(item.category); setImage(item.image);
+    setEditingId(item.id);
+    setName(item.name);
+    setDesc(item.description);
+    setPrice(String(item.price));
+    setUnitCost(item.unitCost === undefined ? '' : String(item.unitCost));
+    setCat(item.category);
+    setImage(item.image);
     setEditorOpen(true);
   };
 
@@ -206,7 +258,44 @@ function ItemsTab() {
               <label className="space-y-1 text-sm font-medium">Custo unitário (R$)<CurrencyInput value={unitCost.trim() ? Number(unitCost) : null} onValueChange={(value) => setUnitCost(value === null ? '' : String(value))} placeholder="Opcional" /><span className="block text-xs font-normal text-muted-foreground">Usado apenas nos relatórios internos.</span></label>
               <label className="space-y-1 text-sm font-medium sm:col-span-2">Descrição<Input value={desc} onChange={(event) => setDesc(event.target.value)} placeholder="Ingredientes e detalhes" /></label>
               <label className="space-y-1 text-sm font-medium">Categoria<Input value={cat} onChange={(event) => setCat(event.target.value)} placeholder="Burgers" /></label>
-              <label className="space-y-1 text-sm font-medium">URL da imagem<Input type="url" value={image} onChange={(event) => setImage(event.target.value)} placeholder="https://..." /></label>
+              <div className="space-y-1 text-sm font-medium">
+                Foto do produto
+                <div className="flex gap-2">
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={(event) => void handleImageUpload(event.target.files?.[0])}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="flex-1"
+                    disabled={uploadingImage}
+                    onClick={() => imageInputRef.current?.click()}
+                  >
+                    <Upload className="mr-1 h-4 w-4" />
+                    {uploadingImage ? 'Enviando...' : 'Escolher foto'}
+                  </Button>
+                  {image && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setImage('')}
+                      title="Remover foto"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+                {image && (
+                  <div className="mt-2 rounded-lg overflow-hidden bg-muted h-32 w-full">
+                    <img src={image} alt="Preview" className="h-full w-full object-cover" />
+                  </div>
+                )}
+              </div>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={clearForm}><X className="mr-1 h-4 w-4" />Cancelar</Button>

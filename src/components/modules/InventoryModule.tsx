@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Package, Plus, Trash2, AlertTriangle, Boxes, History } from 'lucide-react';
+import { Package, Plus, Trash2, AlertTriangle, Boxes, History, Image as ImageIcon, Upload, X } from 'lucide-react';
 import { products as initialProducts, formatCurrency } from '@/mockData';
 import { useApp } from '@/store';
 import type { InventoryMovement, Product } from '@/types';
@@ -7,6 +7,7 @@ import { PERSISTENT_STATE_ERROR_EVENT, syncPersistentState, usePersistentState }
 import { commitEmployeeRecords } from '@/lib/atomicEmployeeRecords';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/auth/AuthContext';
+import { uploadProductImage } from '@/lib/imageUpload';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -47,11 +48,16 @@ export function InventoryModule() {
   const [categoryChoice, setCategoryChoice] = useState('');
   const [newCategory, setNewCategory] = useState('');
   const [unit, setUnit] = useState('un');
+  const [image, setImage] = useState('');
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [thresholdDrafts, setThresholdDrafts] = useState<Record<string, string>>({});
   const [costDrafts, setCostDrafts] = useState<Record<string, string>>({});
   const [adjustmentAmounts, setAdjustmentAmounts] = useState<Record<string, string>>({});
   const [stockDecreaseProductId, setStockDecreaseProductId] = useState<string | null>(null);
   const [stockDecreaseReason, setStockDecreaseReason] = useState('');
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [addProductOpen, setAddProductOpen] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const savingRef = useRef(false);
 
   const commitStock = async (updatedItems: Product[], updatedMovements: InventoryMovement[]) => {
@@ -91,6 +97,43 @@ export function InventoryModule() {
   const lowStock = items.filter((product) => product.stock > 0 && product.stock <= thresholdFor(product));
   const outOfStock = items.filter((product) => product.stock <= 0);
 
+  const handleImageUpload = async (file?: File) => {
+    if (!file || !user) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Selecione um arquivo de imagem.');
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      toast.error('A imagem deve ter até 8 MB.');
+      return;
+    }
+    setUploadingImage(true);
+    try {
+      const imageUrl = await uploadProductImage('product-pictures', user.id, Boolean(user.isDemo), file);
+      setImage(imageUrl);
+      toast.success('Foto carregada com sucesso!');
+    } catch (reason) {
+      toast.error(reason instanceof Error ? reason.message : 'Não foi possível carregar a foto.');
+    } finally {
+      setUploadingImage(false);
+      if (imageInputRef.current) imageInputRef.current.value = '';
+    }
+  };
+
+  const clearForm = () => {
+    setEditingProductId(null);
+    setName('');
+    setPrice('');
+    setUnitCost('');
+    setStock('');
+    setMinimumStock('5');
+    setCategoryChoice('');
+    setNewCategory('');
+    setUnit('un');
+    setImage('');
+    setAddProductOpen(false);
+  };
+
   const addProduct = async () => {
     const parsedPrice = Number(price);
     const parsedUnitCost = unitCost.trim() ? Number(unitCost) : undefined;
@@ -119,7 +162,7 @@ export function InventoryModule() {
       : categoryChoice || 'Geral';
     const productCategory = resolveInventoryCategory(requestedCategory, categoryOptions);
     const id = globalThis.crypto?.randomUUID?.() ?? `pr${Date.now()}`;
-    const updatedItems = [...items, {
+    const newProduct: Product = {
       id,
       name: name.trim(),
       price: parsedPrice,
@@ -128,7 +171,9 @@ export function InventoryModule() {
       minimumStock: parsedMinimumStock,
       category: productCategory,
       unit: unit.trim(),
-    }];
+      image: image.trim() || undefined,
+    };
+    const updatedItems = [...items, newProduct];
     const updatedMovements: InventoryMovement[] = parsedStock > 0
       ? [...movements, {
         id: globalThis.crypto?.randomUUID?.() ?? `inventory-${Date.now()}`,
@@ -141,8 +186,8 @@ export function InventoryModule() {
       }]
       : movements;
     if (!await commitStock(updatedItems, updatedMovements)) return;
-    setName(''); setPrice(''); setUnitCost(''); setStock(''); setMinimumStock('5'); setCategoryChoice(''); setNewCategory(''); setUnit('un');
-    toast.success('Produto cadastrado!');
+    clearForm();
+    toast.success('Produto adicionado!');
   };
 
   const removeProduct = (id: string) => {
@@ -340,6 +385,41 @@ export function InventoryModule() {
             )}
           </div>
         </div>
+        <div className="mt-4 space-y-2">
+          <Label className="text-xs">Foto do Produto (Opcional)</Label>
+          <div className="flex gap-2 items-center">
+            {image && (
+              <div className="relative h-16 w-16 rounded border border-border overflow-hidden">
+                <img src={image} alt="Preview" className="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  onClick={() => setImage('')}
+                  className="absolute -top-1.5 -right-1.5 bg-destructive text-white rounded-full p-0.5 hover:bg-destructive/90"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={uploadingImage}
+              onClick={() => imageInputRef.current?.click()}
+              className="gap-2"
+            >
+              <Upload className="h-4 w-4" />
+              {uploadingImage ? 'Enviando...' : 'Escolher foto'}
+            </Button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => handleImageUpload(e.target.files?.[0])}
+            />
+          </div>
+        </div>
         <Button className="mt-3" size="sm" onClick={addProduct}>
           <Plus className="h-4 w-4 mr-1" />
           Adicionar produto
@@ -372,7 +452,14 @@ export function InventoryModule() {
             <TableBody>
               {filtered.map((p) => (
                 <TableRow key={p.id} className="hover:bg-muted/30 transition-colors">
-                  <TableCell className="font-medium">{p.name}</TableCell>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      {p.image && (
+                        <img src={p.image} alt={p.name} className="h-8 w-8 rounded object-cover" />
+                      )}
+                      {p.name}
+                    </div>
+                  </TableCell>
                   <TableCell>
                     <Badge variant="secondary">{p.category}</Badge>
                   </TableCell>

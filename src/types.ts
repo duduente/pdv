@@ -121,6 +121,7 @@ export interface Product {
   minimumStock?: number;
   category: string;
   unit: string;
+  image?: string;
 }
 
 export interface InventoryMovement {
