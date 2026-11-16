@@ -1,4 +1,4 @@
-import type { MenuOrder } from '@/types';
+import type { MenuOrder, MenuItem } from '@/types';
 
 function escapeHtml(value: string) {
   const entities: Record<string, string> = {
@@ -15,18 +15,31 @@ function formatCurrency(value: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
 }
 
-export function buildDeliveryOrderPrintHtml(order: MenuOrder, establishmentName: string, driverName?: string) {
+export function buildDeliveryOrderPrintHtml(
+  order: MenuOrder,
+  establishmentName: string,
+  driverName?: string,
+  menuItems?: MenuItem[],
+) {
   const isPickup = order.orderType === 'pickup';
   const payment = order.paymentSplits?.length
     ? order.paymentSplits.map((split) => `${split.method}: ${formatCurrency(split.amount)}`).join(' · ')
     : order.paymentMethod ?? 'Não informado';
-  const items = order.items.map((item) => `
+
+  const itemsHtml = order.items.map((item) => {
+    const menuItem = menuItems?.find((mi) => mi.id === item.productId);
+    return `
     <tr>
       <td>${escapeHtml(String(item.quantity))}×</td>
-      <td>${escapeHtml(item.name)}</td>
+      <td>
+        <div>${escapeHtml(item.name)}</div>
+        ${menuItem?.description ? `<div class="description">${escapeHtml(menuItem.description)}</div>` : ''}
+      </td>
       <td class="amount">${formatCurrency(item.price * item.quantity)}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
+
   const deliveryFee = isPickup ? 0 : order.deliveryFee ?? 0;
   const total = order.total + deliveryFee;
   const date = new Date(order.createdAt);
@@ -50,6 +63,7 @@ export function buildDeliveryOrderPrintHtml(order: MenuOrder, establishmentName:
     th, td { border-bottom: 1px solid #bbb; padding: 6px 2px; text-align: left; vertical-align: top; }
     th { font-size: 12px; }
     .amount { text-align: right; white-space: nowrap; }
+    .description { font-size: 12px; color: #555; margin-top: 2px; }
     .total { border-top: 2px solid #111; font-size: 17px; font-weight: bold; margin-top: 8px; padding-top: 8px; text-align: right; }
     @media print { body { max-width: none; } }
   </style>
@@ -71,7 +85,7 @@ export function buildDeliveryOrderPrintHtml(order: MenuOrder, establishmentName:
     <h2>Itens</h2>
     <table>
       <thead><tr><th>Qtd.</th><th>Produto</th><th class="amount">Valor</th></tr></thead>
-      <tbody>${items}</tbody>
+      <tbody>${itemsHtml}</tbody>
     </table>
     ${!isPickup ? `<p class="amount">Taxa de entrega: ${formatCurrency(deliveryFee)}</p>` : ''}
     <p class="muted">Pagamento: ${escapeHtml(payment)}</p>
@@ -81,12 +95,17 @@ export function buildDeliveryOrderPrintHtml(order: MenuOrder, establishmentName:
 </html>`;
 }
 
-export function printDeliveryOrder(order: MenuOrder, establishmentName: string, driverName?: string) {
+export function printDeliveryOrder(
+  order: MenuOrder,
+  establishmentName: string,
+  driverName?: string,
+  menuItems?: MenuItem[],
+) {
   const printWindow = window.open('', '_blank', 'width=420,height=700');
   if (!printWindow) throw new Error('A janela de impressão foi bloqueada pelo navegador.');
 
   printWindow.document.open();
-  printWindow.document.write(buildDeliveryOrderPrintHtml(order, establishmentName, driverName));
+  printWindow.document.write(buildDeliveryOrderPrintHtml(order, establishmentName, driverName, menuItems));
   printWindow.document.close();
   printWindow.focus();
   printWindow.print();

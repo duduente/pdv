@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { CurrencyInput } from '@/components/ui/currency-input';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { PaymentDialog } from '@/components/modules/PaymentDialog';
@@ -27,7 +28,7 @@ import { appendAuditEvent, createAuditEvent, describeOrderChanges } from '@/lib/
 import { printDeliveryOrder } from '@/lib/orderPrinting';
 
 const EMPTY_REGISTER: CashRegisterData = { activeSessionId: null, sessions: [], sales: [], movements: [] };
-const DEFAULT_SETTINGS: DeliverySettings = { deliveryFee: 0 };
+const DEFAULT_SETTINGS: DeliverySettings = { deliveryFee: 0, menuHelpEnabled: false };
 const PAYMENT_OPTIONS: { value: PaymentMethod; label: string }[] = [
   { value: 'dinheiro', label: 'Dinheiro' },
   { value: 'pix', label: 'Pix' },
@@ -864,7 +865,12 @@ export function DeliveryModule() {
                       </div>
                       <Button type="button" variant="outline" size="icon" title="Imprimir pedido" aria-label={`Imprimir pedido de ${order.customerName || 'cliente'}`} onClick={() => {
                         try {
-                          printDeliveryOrder(order, selectedEstablishment?.name ?? 'Pedido', driver?.name);
+                          printDeliveryOrder(
+                            order,
+                            selectedEstablishment?.name ?? 'Pedido',
+                            driver?.name,
+                            settings.menuHelpEnabled ? menuItems : undefined,
+                          );
                         } catch (reason) {
                           toast.error(reason instanceof Error ? reason.message : 'Não foi possível imprimir o pedido.');
                         }
@@ -1045,12 +1051,21 @@ export function DeliveryStoreSettings({ establishmentId }: { establishmentId: st
 
   return (
     <Card className="space-y-4 p-6" style={accentBorderStyle}>
-      <div><h2 className="text-lg font-semibold">Configurações do Delivery</h2><p className="text-sm text-muted-foreground">Cadastre entregadores e defina a taxa padrão da loja.</p></div>
+      <div><h2 className="text-lg font-semibold">Configurações do Delivery</h2><p className="text-sm text-muted-foreground">Cadastre entregadores, defina a taxa padrão e configure opções de impressão.</p></div>
       <label className="block max-w-sm space-y-1 text-sm font-medium">Valor padrão da entrega (R$)
         <CurrencyInput style={accentBorderStyle} value={settings.deliveryFee} onValueChange={(value) => {
           setSettings((current) => ({ ...current, deliveryFee: value ?? 0 }));
         }} />
       </label>
+      <div className="flex items-center gap-3 rounded-md border p-3" style={accentBorderStyle}>
+        <Switch checked={settings.menuHelpEnabled ?? false} onCheckedChange={(checked) => {
+          setSettings((current) => ({ ...current, menuHelpEnabled: checked }));
+        }} />
+        <div className="flex-1">
+          <p className="font-medium text-sm">Auxílio de Cardápio</p>
+          <p className="text-xs text-muted-foreground">Imprimir descrição dos itens ao gerar pedido</p>
+        </div>
+      </div>
       <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
         <Input style={accentBorderStyle} value={driverName} onChange={(event) => setDriverName(event.target.value)} placeholder="Nome do entregador" />
         <Input style={accentBorderStyle} value={driverPhone} onChange={(event) => setDriverPhone(event.target.value)} placeholder="Telefone" />

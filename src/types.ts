@@ -162,6 +162,7 @@ export interface DeliveryDriver {
 
 export interface DeliverySettings {
   deliveryFee: number;
+  menuHelpEnabled?: boolean;
 }
 
 export interface CashSale {
