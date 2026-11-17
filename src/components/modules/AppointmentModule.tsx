@@ -192,9 +192,56 @@ function ConfigTab() {
     `appointment-duration:${establishmentId}`,
     30,
   );
+  const [slotMode, setSlotMode] = usePersistentState<'per-appointment' | 'per-professional'>(
+    `appointment-slot-mode:${establishmentId}`,
+    'per-appointment',
+  );
 
   return (
     <div className="space-y-4 max-w-2xl">
+      <Card className="p-5">
+        <h3 className="font-semibold mb-4 flex items-center gap-2">
+          <Clock className="h-4 w-4 text-primary" />
+          Modo de Agendamento
+        </h3>
+        <div className="space-y-4">
+          <div className="border rounded-lg p-3 space-y-2">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="slotMode"
+                value="per-appointment"
+                checked={slotMode === 'per-appointment'}
+                onChange={(e) => setSlotMode(e.target.value as typeof slotMode)}
+              />
+              <div>
+                <p className="font-medium text-sm">1 slot por agendamento</p>
+                <p className="text-xs text-muted-foreground">
+                  Vários clientes podem marcar o mesmo horário com diferentes funcionários
+                </p>
+              </div>
+            </label>
+          </div>
+          <div className="border rounded-lg p-3 space-y-2">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="slotMode"
+                value="per-professional"
+                checked={slotMode === 'per-professional'}
+                onChange={(e) => setSlotMode(e.target.value as typeof slotMode)}
+              />
+              <div>
+                <p className="font-medium text-sm">1 slot por funcionário</p>
+                <p className="text-xs text-muted-foreground">
+                  Cada funcionário pode ter apenas um agendamento por horário
+                </p>
+              </div>
+            </label>
+          </div>
+        </div>
+      </Card>
+
       <Card className="p-5">
         <h3 className="font-semibold mb-4 flex items-center gap-2">
           <Clock className="h-4 w-4 text-primary" />
@@ -486,24 +533,39 @@ function CalendarTab() {
     isBarbershop ? initialPros : [],
     { readOnly: true },
   );
+  const [slotMode] = usePersistentState<'per-appointment' | 'per-professional'>(
+    `appointment-slot-mode:${selectedEstablishment?.id ?? 'default'}`,
+    'per-appointment',
+  );
   const [selectedDate, setSelectedDate] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   });
   const [showHistory, setShowHistory] = useState(false);
+  const [selectedProfessional, setSelectedProfessional] = useState('');
   const [draft, setDraft] = useState<Appointment | null>(null);
+  
   const visibleAppointments = appts
-    .filter((appointment) => showHistory || appointment.date === selectedDate)
+    .filter((appointment) => (showHistory || appointment.date === selectedDate))
+    .filter((appointment) => !selectedProfessional || appointment.professional === selectedProfessional)
     .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
 
   const saveAppointment = () => {
     if (!draft) return;
+    
     const hasConflict = draft.status !== 'cancelled' && appts.some((appointment) =>
       appointment.id !== draft.id && appointment.status !== 'cancelled' &&
       appointment.date === draft.date && appointment.time === draft.time &&
-      appointment.professional === draft.professional,
+      (slotMode === 'per-professional' 
+        ? appointment.professional === draft.professional
+        : false)
     );
-    if (hasConflict) { toast.error('Este profissional já possui um agendamento nesse horário'); return; }
+    
+    if (hasConflict && slotMode === 'per-professional') { 
+      toast.error('Este profissional já possui um agendamento nesse horário'); 
+      return; 
+    }
+    
     setAppts((current) => current.map((appointment) => appointment.id === draft.id ? draft : appointment));
     setSelectedDate(draft.date);
     setShowHistory(false);
@@ -524,40 +586,214 @@ function CalendarTab() {
   return (
     <div className="space-y-4">
       <Card className="p-5">
-        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-          <div><h3 className="flex items-center gap-2 font-semibold"><CalIcon className="h-4 w-4 text-primary" />Agenda e histórico</h3><p className="text-sm text-muted-foreground">Filtre atendimentos por data e acompanhe pagamento.</p></div>
-          <div className="flex items-center gap-3">
-            <label className="space-y-1 text-xs font-medium">Data<Input type="date" value={selectedDate} onChange={(event) => { setSelectedDate(event.target.value); setShowHistory(false); }} /></label>
-            <label className="flex items-center gap-2 pb-2 text-sm"><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} />Histórico completo</label>
+        <div className="mb-4 flex flex-col gap-3">
+          <div>
+            <h3 className="flex items-center gap-2 font-semibold mb-1">
+              <CalIcon className="h-4 w-4 text-primary" />
+              Agenda e histórico
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              Filtre atendimentos por data, funcionário e acompanhe pagamento.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="space-y-1 text-xs font-medium">
+              Data
+              <Input 
+                type="date" 
+                value={selectedDate} 
+                onChange={(event) => { 
+                  setSelectedDate(event.target.value); 
+                  setShowHistory(false); 
+                }} 
+              />
+            </label>
+            <label className="space-y-1 text-xs font-medium">
+              Funcionário
+              <select 
+                className="h-10 w-48 rounded-md border border-input bg-background px-3 text-sm"
+                value={selectedProfessional}
+                onChange={(event) => setSelectedProfessional(event.target.value)}
+              >
+                <option value="">Todos os funcionários</option>
+                {professionals.map((prof) => (
+                  <option key={prof.id} value={prof.name}>
+                    {prof.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-sm pt-6">
+              <input 
+                type="checkbox" 
+                checked={showHistory} 
+                onChange={(event) => setShowHistory(event.target.checked)} 
+              />
+              Histórico completo
+            </label>
           </div>
         </div>
         <div className="space-y-2">
           {visibleAppointments.map((appointment) => (
             <div key={appointment.id} className="flex flex-wrap items-center gap-3 rounded-md border p-3">
-              <div className="flex h-12 w-14 shrink-0 flex-col items-center justify-center rounded-md bg-primary text-primary-foreground"><span className="text-lg font-bold">{appointment.time}</span></div>
-              <div className="min-w-0 flex-1"><p className="font-medium">{appointment.clientName}</p><p className="text-sm text-muted-foreground">{appointment.service} · {appointment.professional}</p><p className="text-xs text-muted-foreground">{new Date(`${appointment.date}T00:00:00`).toLocaleDateString('pt-BR')}</p></div>
-              <Badge variant="outline" className={appointment.paymentStatus === 'paid' || appointment.status === 'completed' ? 'rounded-full border-emerald-200/60 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700' : appointment.status === 'cancelled' ? 'rounded-full border-rose-200/70 bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700' : appointment.status === 'pending' ? 'rounded-full border-amber-200/70 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700' : 'rounded-full border-slate-200 bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600'}>{statusLabel(appointment)}</Badge>
-              <Button type="button" size="icon" variant="ghost" onClick={() => setDraft({ ...appointment })} aria-label={`Editar agendamento de ${appointment.clientName}`}><Pencil className="h-4 w-4" /></Button>
+              <div className="flex h-12 w-14 shrink-0 flex-col items-center justify-center rounded-md bg-primary text-primary-foreground">
+                <span className="text-lg font-bold">{appointment.time}</span>
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="font-medium">{appointment.clientName}</p>
+                <p className="text-sm text-muted-foreground">
+                  {appointment.service} · {appointment.professional}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {new Date(`${appointment.date}T00:00:00`).toLocaleDateString('pt-BR')}
+                </p>
+              </div>
+              <Badge 
+                variant="outline" 
+                className={
+                  appointment.paymentStatus === 'paid' || appointment.status === 'completed' 
+                    ? 'rounded-full border-emerald-200/60 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700' 
+                    : appointment.status === 'cancelled' 
+                    ? 'rounded-full border-rose-200/70 bg-rose-50 px-3 py-1 text-xs font-medium text-rose-700' 
+                    : appointment.status === 'pending' 
+                    ? 'rounded-full border-amber-200/70 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700' 
+                    : 'rounded-full border-slate-200 bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600'
+                }
+              >
+                {statusLabel(appointment)}
+              </Badge>
+              <Button 
+                type="button" 
+                size="icon" 
+                variant="ghost" 
+                onClick={() => setDraft({ ...appointment })} 
+                aria-label={`Editar agendamento de ${appointment.clientName}`}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
             </div>
           ))}
-          {!visibleAppointments.length && <p className="py-8 text-center text-sm text-muted-foreground">Nenhum agendamento nesta data.</p>}
+          {!visibleAppointments.length && (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              Nenhum agendamento nesta data{selectedProfessional ? ` para ${selectedProfessional}` : ''}.
+            </p>
+          )}
         </div>
       </Card>
 
       <Dialog open={draft !== null} onOpenChange={(open) => { if (!open) setDraft(null); }}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Editar agendamento</DialogTitle><DialogDescription>Atualize os dados do atendimento e seu status.</DialogDescription></DialogHeader>
-          {draft && <div className="grid gap-3 py-2 sm:grid-cols-2">
-            <label className="space-y-1 text-sm font-medium">Cliente<Input value={draft.clientName} onChange={(event) => setDraft({ ...draft, clientName: event.target.value })} /></label>
-            <label className="space-y-1 text-sm font-medium">WhatsApp<Input value={draft.whatsapp} onChange={(event) => setDraft({ ...draft, whatsapp: event.target.value })} /></label>
-            <label className="space-y-1 text-sm font-medium">Serviço<select value={draft.service} onChange={(event) => setDraft({ ...draft, service: event.target.value })} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">{services.map((service) => <option key={service.id} value={service.name}>{service.name}</option>)}</select></label>
-            <label className="space-y-1 text-sm font-medium">Profissional<select value={draft.professional} onChange={(event) => setDraft({ ...draft, professional: event.target.value })} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="Qualquer profissional">Qualquer profissional</option>{professionals.map((professional) => <option key={professional.id} value={professional.name}>{professional.name}</option>)}</select></label>
-            <label className="space-y-1 text-sm font-medium">Data<Input type="date" value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} /></label>
-            <label className="space-y-1 text-sm font-medium">Horário<Input type="time" value={draft.time} onChange={(event) => setDraft({ ...draft, time: event.target.value })} /></label>
-            <label className="space-y-1 text-sm font-medium sm:col-span-2">Status<select value={draft.status ?? 'confirmed'} onChange={(event) => setDraft({ ...draft, status: event.target.value as AppointmentStatus })} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="pending">Pendente</option><option value="confirmed">Confirmado</option><option value="completed">Concluído</option><option value="cancelled">Cancelado</option></select></label>
-            <p className="text-xs text-muted-foreground sm:col-span-2">Pagamento: {draft.paymentStatus === 'paid' ? 'Pago' : 'Pendente'}. O status de pagamento é atualizado pelo caixa.</p>
-          </div>}
-          <DialogFooter><Button type="button" variant="outline" onClick={() => setDraft(null)}>Cancelar</Button><Button type="button" onClick={saveAppointment}>Salvar alterações</Button></DialogFooter>
+          <DialogHeader>
+            <DialogTitle>Editar agendamento</DialogTitle>
+            <DialogDescription>
+              Atualize os dados do atendimento e seu status.
+              {slotMode === 'per-professional' && (
+                <div className="mt-2 p-2 bg-blue-50 text-blue-700 text-xs rounded">
+                  <strong>Modo atual:</strong> 1 slot por funcionário. Apenas um agendamento por horário e funcionário.
+                </div>
+              )}
+              {slotMode === 'per-appointment' && (
+                <div className="mt-2 p-2 bg-green-50 text-green-700 text-xs rounded">
+                  <strong>Modo atual:</strong> 1 slot por agendamento. Múltiplos clientes podem marcar o mesmo horário.
+                </div>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          {draft && (
+            <div className="grid gap-3 py-2 sm:grid-cols-2">
+              <label className="space-y-1 text-sm font-medium">
+                Cliente
+                <Input 
+                  value={draft.clientName} 
+                  onChange={(event) => setDraft({ ...draft, clientName: event.target.value })} 
+                />
+              </label>
+              <label className="space-y-1 text-sm font-medium">
+                WhatsApp
+                <Input 
+                  value={draft.whatsapp} 
+                  onChange={(event) => setDraft({ ...draft, whatsapp: event.target.value })} 
+                />
+              </label>
+              <label className="space-y-1 text-sm font-medium">
+                Serviço
+                <select 
+                  value={draft.service} 
+                  onChange={(event) => setDraft({ ...draft, service: event.target.value })} 
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  {services.map((service) => (
+                    <option key={service.id} value={service.name}>
+                      {service.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1 text-sm font-medium">
+                Profissional
+                <select 
+                  value={draft.professional} 
+                  onChange={(event) => setDraft({ ...draft, professional: event.target.value })} 
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  <option value="Qualquer profissional">Qualquer profissional</option>
+                  {professionals.map((professional) => (
+                    <option key={professional.id} value={professional.name}>
+                      {professional.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1 text-sm font-medium">
+                Data
+                <Input 
+                  type="date" 
+                  value={draft.date} 
+                  onChange={(event) => setDraft({ ...draft, date: event.target.value })} 
+                />
+              </label>
+              <label className="space-y-1 text-sm font-medium">
+                Horário
+                <Input 
+                  type="time" 
+                  value={draft.time} 
+                  onChange={(event) => setDraft({ ...draft, time: event.target.value })} 
+                />
+              </label>
+              <label className="space-y-1 text-sm font-medium sm:col-span-2">
+                Status
+                <select 
+                  value={draft.status ?? 'confirmed'} 
+                  onChange={(event) => setDraft({ ...draft, status: event.target.value as AppointmentStatus })} 
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  <option value="pending">Pendente</option>
+                  <option value="confirmed">Confirmado</option>
+                  <option value="completed">Concluído</option>
+                  <option value="cancelled">Cancelado</option>
+                </select>
+              </label>
+              <p className="text-xs text-muted-foreground sm:col-span-2">
+                Pagamento: {draft.paymentStatus === 'paid' ? 'Pago' : 'Pendente'}. 
+                O status de pagamento é atualizado pelo caixa.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button 
+              type="button" 
+              variant="outline" 
+              onClick={() => setDraft(null)}
+            >
+              Cancelar
+            </Button>
+            <Button 
+              type="button" 
+              onClick={saveAppointment}
+            >
+              Salvar alterações
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

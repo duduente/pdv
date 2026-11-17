@@ -466,7 +466,7 @@ export function CashRegisterModule({ mode = 'cash' }: { mode?: 'cash' | 'reports
         </TabsContent>}
         {(canViewSales || canViewReports) && <TabsContent value="history" className="mt-4"><AuditHistory events={register.auditEvents ?? []} /></TabsContent>}
         {canViewSessions && <TabsContent value="session" className="mt-4">
-          <CashSessionTab establishmentId={establishmentId} register={register} setRegister={setRegister} activeSession={activeSession} user={user} />
+          <CashSessionTab establishmentId={establishmentId} register={register} setRegister={setRegister} activeSession={activeSession} user={user} orders={orders} commands={commands} />
         </TabsContent>}
       </Tabs>
     </div>
@@ -1342,13 +1342,15 @@ function ReportsTab({ establishmentName, sales, movements, expenses, auditEvents
 }
 
 function CashSessionTab({
-  establishmentId, register, setRegister, activeSession, user,
+  establishmentId, register, setRegister, activeSession, user, orders, commands,
 }: {
   establishmentId: string;
   register: CashRegisterData;
   setRegister: Dispatch<SetStateAction<CashRegisterData>>;
   activeSession: CashSession | null;
   user: ReturnType<typeof useAuth>['user'];
+  orders: MenuOrder[];
+  commands: Command[];
 }) {
   const [openingAmount, setOpeningAmount] = useState('');
   const [countedAmount, setCountedAmount] = useState('');
@@ -1369,6 +1371,27 @@ function CashSessionTab({
   };
   const close = () => {
     if (!activeSession) return;
+    
+    const establishmentOrders = orders.filter((order) => order.establishmentId === establishmentId);
+    const unfinishedDeliveryOrders = establishmentOrders.filter((order) => {
+      const status = order.deliveryStatus ?? (order.status === 'paid' ? 'finalized' : 'production');
+      return status !== 'finalized' && status !== 'cancelled';
+    });
+    
+    const unfinishedCommands = commands.filter((cmd) => cmd.establishmentId === establishmentId && cmd.status === 'open');
+    
+    if (unfinishedDeliveryOrders.length > 0 || unfinishedCommands.length > 0) {
+      const messages = [];
+      if (unfinishedDeliveryOrders.length > 0) {
+        messages.push(`${unfinishedDeliveryOrders.length} pedido(s) de delivery/retirada não finalizado(s)`);
+      }
+      if (unfinishedCommands.length > 0) {
+        messages.push(`${unfinishedCommands.length} comanda(s) aberta(s)`);
+      }
+      toast.error(`Não é possível fechar o caixa com: ${messages.join(' e ')}. Finalize todos os pedidos e comandas antes de fechar.`);
+      return;
+    }
+    
     if (countedAmount === '' || !Number.isFinite(Number(countedAmount))) { toast.error('Informe o valor contado no caixa'); return; }
     const counted = Math.round(Number(countedAmount) * 100) / 100;
     if (counted < 0) { toast.error('O valor contado não pode ser negativo'); return; }

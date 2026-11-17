@@ -62,6 +62,31 @@ function getAccentBorderStyle(accentColor: string) {
   return { borderColor: `color-mix(in srgb, ${accentColor} 32%, transparent)` };
 }
 
+function getOrderBorderColor(
+  status: DeliveryStatus,
+  createdAt: string,
+  estimatedDeliveryTimeMinutes?: number,
+): string {
+  if (status === 'finalized') {
+    return '#d1d5db';
+  }
+  if (status === 'dispatched') {
+    return '#dc2626';
+  }
+  if (status === 'cancelled') {
+    return '#6b7280';
+  }
+
+  const estimatedMinutes = estimatedDeliveryTimeMinutes ?? 30;
+  const ageMinutes = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60);
+
+  if (ageMinutes > estimatedMinutes) {
+    return '#eab308';
+  }
+
+  return '#22c55e';
+}
+
 function createId() {
   return globalThis.crypto?.randomUUID?.() ?? `delivery-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -296,6 +321,20 @@ export function DeliveryModule() {
     orderAudioContext.current = null;
     if (context && context.state !== 'closed') void context.close();
   }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const ordersWithPendingStatus = orders.filter((order) => {
+        const status = order.deliveryStatus ?? (order.status === 'paid' ? 'finalized' : 'production');
+        return status !== 'finalized' && status !== 'cancelled';
+      });
+      if (ordersWithPendingStatus.length > 0) {
+        setOrders([...orders]);
+      }
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [orders, setOrders]);
 
   if (!selectedEstablishment) return null;
   if (!registerLoaded || !ordersLoaded) return <p>Carregando pedidos e caixa...</p>;
@@ -783,8 +822,9 @@ export function DeliveryModule() {
               setCancellationReason('');
               setCancellationOrder(order);
             };
+            const orderBorderColor = getOrderBorderColor(status, order.createdAt, settings.estimatedDeliveryTimeMinutes);
             return (
-              <article key={order.id} className="overflow-hidden rounded-lg border" style={accentBorderStyle}>
+              <article key={order.id} className="overflow-hidden rounded-lg border" style={{ borderColor: orderBorderColor, borderWidth: '2px' }}>
                 <div className="flex items-center gap-2 p-2 sm:p-3">
                   <button
                     type="button"
@@ -1051,11 +1091,24 @@ export function DeliveryStoreSettings({ establishmentId }: { establishmentId: st
 
   return (
     <Card className="space-y-4 p-6" style={accentBorderStyle}>
-      <div><h2 className="text-lg font-semibold">Configurações do Delivery</h2><p className="text-sm text-muted-foreground">Cadastre entregadores, defina a taxa padrão e configure opções de impressão.</p></div>
+      <div><h2 className="text-lg font-semibold">Configurações do Delivery</h2><p className="text-sm text-muted-foreground">Cadastre entregadores, defina a taxa padrão, tempo estimado de entrega e configure opções de impressão.</p></div>
       <label className="block max-w-sm space-y-1 text-sm font-medium">Valor padrão da entrega (R$)
         <CurrencyInput style={accentBorderStyle} value={settings.deliveryFee} onValueChange={(value) => {
           setSettings((current) => ({ ...current, deliveryFee: value ?? 0 }));
         }} />
+      </label>
+      <label className="block max-w-sm space-y-1 text-sm font-medium">Tempo estimado de entrega (minutos)
+        <Input
+          type="number"
+          min="1"
+          max="999"
+          style={accentBorderStyle}
+          value={settings.estimatedDeliveryTimeMinutes ?? 30}
+          onChange={(event) => {
+            const value = Number(event.target.value);
+            setSettings((current) => ({ ...current, estimatedDeliveryTimeMinutes: value > 0 ? value : 30 }));
+          }}
+        />
       </label>
       <div className="flex items-center gap-3 rounded-md border p-3" style={accentBorderStyle}>
         <Switch checked={settings.menuHelpEnabled ?? false} onCheckedChange={(checked) => {

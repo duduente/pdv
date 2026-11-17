@@ -16,7 +16,8 @@ import { Input } from '@/components/ui/input';
 import { CurrencyInput } from '@/components/ui/currency-input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { Download } from 'lucide-react';
+import { Download, Plus } from 'lucide-react';
+import { EmployeeEditDialog } from './EmployeeEditDialog';
 
 const EMPTY_EMPLOYEES: EmployeeRecords = { employees: [], consumptions: [], settlements: [] };
 const EMPTY_REGISTER: CashRegisterData = { activeSessionId: null, sessions: [], sales: [], movements: [] };
@@ -49,6 +50,7 @@ export function EmployeesModule() {
   const [storageError, setStorageError] = useState('');
   const [selectedId, setSelectedId] = useState('');
   const [editingId, setEditingId] = useState('');
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState('');
   const [userId, setUserId] = useState('');
   const [salary, setSalary] = useState(0);
@@ -174,12 +176,37 @@ export function EmployeesModule() {
     });
     if (!savedSuccessfully) return;
     setSelectedId(saved.id);
-    setEditingId(''); setName(''); setUserId(''); setSalary(0); setCommission('0'); setDiscount('0'); setActive(true);
+    closeDialog();
   };
 
   const startEditing = (entry: EmployeeProfile) => {
     setEditingId(entry.id); setName(entry.name); setUserId(entry.userId ?? '');
     setSalary(entry.salaryCents / 100); setCommission(String(entry.commissionPercent)); setDiscount(String(entry.consumptionDiscountPercent)); setActive(entry.active);
+    setDialogOpen(true);
+  };
+
+  const startAdding = () => {
+    setEditingId('');
+    setName('');
+    setUserId('');
+    setSalary(0);
+    setCommission('0');
+    setDiscount('0');
+    setActive(true);
+    setDialogOpen(true);
+  };
+
+  const closeDialog = () => {
+    setDialogOpen(false);
+    setTimeout(() => {
+      setEditingId('');
+      setName('');
+      setUserId('');
+      setSalary(0);
+      setCommission('0');
+      setDiscount('0');
+      setActive(true);
+    }, 200);
   };
 
   const addConsumption = async (event: FormEvent) => {
@@ -300,25 +327,67 @@ export function EmployeesModule() {
   if (!selectedEstablishment) return null;
   return (
     <div className="space-y-4">
-      <div><h2 className="text-xl font-semibold">Funcionários</h2><p className="text-sm text-muted-foreground">Cadastros, consumos, comissões e fechamentos desta loja.</p></div>
-      {!atomicRemote && <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Modo demonstração: dados locais não possuem controle transacional entre dispositivos.</p>}
-      {storageError && <p role="alert" className="text-sm text-destructive">{storageError} Recarregue a página antes de tentar novamente.</p>}
+      <div>
+        <h2 className="text-xl font-semibold">Funcionários</h2>
+        <p className="text-sm text-muted-foreground">
+          Cadastros, consumos, comissões e fechamentos desta loja.
+        </p>
+      </div>
+      {!atomicRemote && (
+        <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          Modo demonstração: dados locais não possuem controle transacional entre
+          dispositivos.
+        </p>
+      )}
+      {storageError && (
+        <p role="alert" className="text-sm text-destructive">
+          {storageError} Recarregue a página antes de tentar novamente.
+        </p>
+      )}
       <Tabs defaultValue="employees">
         <TabsList className="flex h-auto flex-wrap justify-start">
-          <TabsTrigger value="employees">Funcionários</TabsTrigger><TabsTrigger value="consumption">Consumos</TabsTrigger>
-          <TabsTrigger value="commissions">Comissões</TabsTrigger><TabsTrigger value="settlement">Fechamento</TabsTrigger>
+          <TabsTrigger value="employees">Funcionários</TabsTrigger>
+          <TabsTrigger value="consumption">Consumos</TabsTrigger>
+          <TabsTrigger value="commissions">Comissões</TabsTrigger>
+          <TabsTrigger value="settlement">Fechamento</TabsTrigger>
         </TabsList>
         <TabsContent value="employees" className="space-y-4">
-          <Card className="p-4"><form onSubmit={saveEmployee} className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1 text-sm">Nome<Input value={name} onChange={(event) => setName(event.target.value)} required /></label>
-            <label className="space-y-1 text-sm">Subusuário opcional<select className={selectClass} value={userId} disabled={!canManageUsers} onChange={(event) => setUserId(event.target.value)}><option value="">Sem vínculo</option>{userId && !users.some((entry) => entry.id === userId) && <option value={userId}>Vínculo existente</option>}{users.map((entry) => <option key={entry.id} value={entry.id}>{entry.displayName} · @{entry.username}</option>)}</select></label>
-            <label className="space-y-1 text-sm">Salário mensal<CurrencyInput value={salary} onValueChange={(value) => setSalary(value ?? 0)} /></label>
-            <label className="space-y-1 text-sm">Comissão (%)<Input type="number" min="0" max="100" step="0.01" value={commission} onChange={(event) => setCommission(event.target.value)} required /></label>
-            <label className="space-y-1 text-sm">Desconto no consumo (%)<Input type="number" min="0" max="100" step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} required /></label>
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} />Ativo para vendas e agendamentos</label>
-            <div className="flex items-end gap-2"><Button disabled={!ready} type="submit">{editingId ? 'Salvar funcionário' : 'Cadastrar funcionário'}</Button>{editingId && <Button type="button" variant="outline" onClick={() => { setEditingId(''); setName(''); setUserId(''); setSalary(0); setCommission('0'); setDiscount('0'); setActive(true); }}>Cancelar</Button>}</div>
-          </form></Card>
-          <Card className="divide-y p-4">{records.employees.map((entry) => <div key={entry.id} className="flex items-center justify-between gap-3 py-2"><span>{entry.name} · {entry.commissionPercent}% comissão · {entry.consumptionDiscountPercent}% desconto{!entry.active && ' · Inativo'}</span><Button type="button" size="sm" variant="outline" onClick={() => startEditing(entry)}>Editar</Button></div>)}{!records.employees.length && <p className="text-sm text-muted-foreground">Nenhum funcionário cadastrado.</p>}</Card>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-muted-foreground">
+              Clique no botão abaixo para adicionar um novo funcionário ou edite um existente.
+            </p>
+            <Button onClick={startAdding} disabled={!ready}>
+              <Plus className="mr-2 h-4 w-4" />
+              Novo funcionário
+            </Button>
+          </div>
+          <Card className="divide-y p-4">
+            {records.employees.map((entry) => (
+              <div
+                key={entry.id}
+                className="flex items-center justify-between gap-3 py-2"
+              >
+                <span>
+                  {entry.name} · {entry.commissionPercent}% comissão ·{' '}
+                  {entry.consumptionDiscountPercent}% desconto
+                  {!entry.active && ' · Inativo'}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => startEditing(entry)}
+                >
+                  Editar
+                </Button>
+              </div>
+            ))}
+            {!records.employees.length && (
+              <p className="text-sm text-muted-foreground">
+                Nenhum funcionário cadastrado.
+              </p>
+            )}
+          </Card>
         </TabsContent>
         <TabsContent value="consumption" className="space-y-4">
           <Card className="p-4"><form onSubmit={addConsumption} className="grid gap-3 sm:grid-cols-2">
@@ -354,6 +423,27 @@ export function EmployeesModule() {
           <Card className="divide-y p-4">{records.settlements.filter((entry) => !selectedId || entry.employeeId === selectedId).map((entry) => <div key={`${entry.employeeId}:${entry.month}`} className="py-3 text-sm"><p className="font-semibold">{records.employees.find((item) => item.id === entry.employeeId)?.name} · {entry.month}</p><p>Salário {formatCurrency(entry.salaryCents / 100)} · Comissões {formatCurrency(entry.commissionCents / 100)} · Estornos {formatCurrency(entry.cancelledCommissionCents / 100)} · Consumos {formatCurrency(entry.consumptionCents / 100)}</p><p>A pagar {formatCurrency(entry.payableCents / 100)} · Saldo para o próximo mês {formatCurrency(entry.nextCarriedDebtCents / 100)}</p></div>)}</Card>
         </TabsContent>
       </Tabs>
+      <EmployeeEditDialog
+        open={dialogOpen}
+        onOpenChange={closeDialog}
+        onSubmit={saveEmployee}
+        disabled={!ready}
+        isEditing={!!editingId}
+        name={name}
+        onNameChange={setName}
+        userId={userId}
+        onUserIdChange={setUserId}
+        salary={salary}
+        onSalaryChange={setSalary}
+        commission={commission}
+        onCommissionChange={setCommission}
+        discount={discount}
+        onDiscountChange={setDiscount}
+        active={active}
+        onActiveChange={setActive}
+        users={users}
+        canManageUsers={canManageUsers}
+      />
     </div>
   );
 }

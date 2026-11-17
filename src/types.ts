@@ -97,6 +97,13 @@ export interface WorkingHours {
   end: string;
 }
 
+export type AppointmentSlotMode = 'per-appointment' | 'per-professional';
+
+export interface AppointmentSettings {
+  slotMode: AppointmentSlotMode;
+  defaultDurationMinutes: number;
+}
+
 export interface MenuItem {
   id: string;
   name: string;
@@ -163,6 +170,7 @@ export interface DeliveryDriver {
 export interface DeliverySettings {
   deliveryFee: number;
   menuHelpEnabled?: boolean;
+  estimatedDeliveryTimeMinutes?: number;
 }
 
 export interface CashSale {
